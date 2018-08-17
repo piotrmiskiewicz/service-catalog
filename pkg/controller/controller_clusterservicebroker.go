@@ -33,6 +33,7 @@ import (
 	"github.com/kubernetes-incubator/service-catalog/pkg/apis/servicecatalog/v1beta1"
 	"github.com/kubernetes-incubator/service-catalog/pkg/metrics"
 	"github.com/kubernetes-incubator/service-catalog/pkg/pretty"
+	osb "github.com/pmorie/go-open-service-broker-client/v2"
 )
 
 // the Message strings have a terminating period and space so they can
@@ -165,6 +166,10 @@ func (c *controller) reconcileClusterServiceBrokerKey(key string) error {
 	return c.reconcileClusterServiceBroker(broker)
 }
 
+type WithAuthCreator interface {
+	WithClientConfig(config *osb.ClientConfiguration) (osb.Client, error)
+}
+
 // reconcileClusterServiceBroker is the control-loop that reconciles a Broker. An
 // error is returned to indicate that the binding has not been fully
 // processed and should be resubmitted at a later time.
@@ -195,7 +200,9 @@ func (c *controller) reconcileClusterServiceBroker(broker *v1beta1.ClusterServic
 		clientConfig := NewClientConfigurationForBroker(broker.ObjectMeta, &broker.Spec.CommonServiceBrokerSpec, authConfig)
 
 		glog.V(4).Info(pcb.Messagef("Creating client, URL: %v", broker.Spec.URL))
-		brokerClient, err := c.brokerClientCreateFunc(clientConfig)
+		//brokerClient, err := c.brokerClientCreateFunc(clientConfig)
+		brokerClient, err := c.osbClient.(WithAuthCreator).WithClientConfig(clientConfig)
+
 		if err != nil {
 			s := fmt.Sprintf("Error creating client for broker %q: %s", broker.Name, err)
 			glog.Info(pcb.Message(s))

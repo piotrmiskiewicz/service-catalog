@@ -117,6 +117,31 @@ const (
 	jsonType    = "application/json"
 )
 
+func (c *client) WithClientConfig(config *ClientConfiguration) (Client, error) {
+	cl := &client{
+		Name:                config.Name,
+		URL:                 strings.TrimRight(config.URL, "/"),
+		APIVersion:          config.APIVersion,
+		EnableAlphaFeatures: config.EnableAlphaFeatures,
+		Verbose:             config.Verbose,
+		httpClient:          c.httpClient,
+	}
+	cl.doRequestFunc = cl.doRequest
+
+	if config.AuthConfig != nil {
+		if config.AuthConfig.BasicAuthConfig == nil && config.AuthConfig.BearerConfig == nil {
+			return nil, errors.New("Non-nil AuthConfig cannot be empty")
+		}
+		if config.AuthConfig.BasicAuthConfig != nil && config.AuthConfig.BearerConfig != nil {
+			return nil, errors.New("Only one AuthConfig implementation must be set at a time")
+		}
+
+		cl.AuthConfig = config.AuthConfig
+	}
+
+	return cl, nil
+}
+
 // prepareAndDo prepares a request for the given method, URL, and
 // message body, and executes the request, returning an http.Response or an
 // error.  Errors returned from this function represent http-layer errors and

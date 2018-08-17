@@ -89,6 +89,11 @@ func NewController(
 	clusterIDConfigMapName string,
 	clusterIDConfigMapNamespace string,
 ) (Controller, error) {
+	osbClient, err := brokerClientCreateFunc(osb.DefaultClientConfiguration())
+	if err != nil {
+		return nil, err
+	}
+
 	controller := &controller{
 		kubeClient:                  kubeClient,
 		serviceCatalogClient:        serviceCatalogClient,
@@ -109,6 +114,7 @@ func NewController(
 		bindingPollingQueue:         workqueue.NewNamedRateLimitingQueue(workqueue.NewItemExponentialFailureRateLimiter(pollingStartInterval, operationPollingMaximumBackoffDuration), "binding-poller"),
 		clusterIDConfigMapName:      clusterIDConfigMapName,
 		clusterIDConfigMapNamespace: clusterIDConfigMapNamespace,
+		osbClient: osbClient,
 	}
 
 	controller.clusterServiceBrokerLister = clusterServiceBrokerInformer.Lister()
@@ -223,6 +229,8 @@ type controller struct {
 	// readers passing the clusterID to a broker.
 	clusterIDLock               sync.RWMutex
 	instanceOperationRetryQueue instanceOperationBackoff
+
+	osbClient osb.Client
 }
 
 // Run runs the controller until the given stop channel can be read from.

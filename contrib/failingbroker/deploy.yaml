@@ -1,0 +1,24 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: nasty-deploy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nasty-app
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: nasty-app
+    spec:
+      containers:
+      - name: broker
+        image: "nasty-app:1.0.0"
+        imagePullPolicy: "IfNotPresent"
+        ports:
+        - containerPort: 8080

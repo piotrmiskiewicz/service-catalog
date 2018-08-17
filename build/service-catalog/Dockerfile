@@ -14,20 +14,11 @@
 
 # Build a Debian-based image to copy root CA certificates from it
 # to a scratch-based image using Docker multi-stage builds
-FROM BASEIMAGE as base
+FROM alpine:latest
 
-RUN export DEBIAN_FRONTEND=noninteractive && \
-    apt-get update && \
-    apt-get install ca-certificates -y && \
-    rm -rf /var/lib/apt/lists/*
+RUN apk --no-cache add ca-certificates
+RUN apk add --no-cache curl
 
-# Build actual scratch-based Service Catalog image with root CA certificates
-FROM scratch
-
-COPY --from=base /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-
-ADD tmp /tmp
-
-ADD service-catalog opt/services/
+ADD bin/service-catalog /opt/services/service-catalog
 
 ENTRYPOINT ["/opt/services/service-catalog"]

@@ -24,6 +24,7 @@ import (
 	"github.com/golang/glog"
 	"github.com/kubernetes-incubator/service-catalog/pkg/metrics"
 	osb "github.com/pmorie/go-open-service-broker-client/v2"
+	"github.com/kubernetes-incubator/service-catalog/pkg/controller"
 )
 
 // proxyclient provides a functional implementation of the OSB V2 Client
@@ -58,6 +59,12 @@ const (
 	unbind                   = "Unbind"
 	getBinding               = "GetBinding"
 )
+
+func (pc proxyclient) WithClientConfig(config *osb.ClientConfiguration) (osb.Client, error) {
+	resp, err := pc.realOSBClient.(controller.WithAuthCreator).WithClientConfig(config)
+	pc.updateMetrics("newClient", nil)
+	return resp, err
+}
 
 // GetCatalog implements go-open-service-broker-client/v2/Client.GetCatalog by
 // proxying the method to the underlying implementation and capturing request
