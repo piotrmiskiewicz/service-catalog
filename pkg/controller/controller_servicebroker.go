@@ -702,7 +702,8 @@ func (c *controller) getCurrentServiceClassesAndPlansForNamespacedBroker(broker 
 		v1beta1.FilterSpecServiceBrokerName: broker.Name,
 	}
 	fieldSelector := fields.SelectorFromSet(fieldSet).String()
-	listOpts := metav1.ListOptions{FieldSelector: fieldSelector}
+	_ = metav1.ListOptions{FieldSelector: fieldSelector}
+	listOpts := metav1.ListOptions{}
 
 	existingServiceClasses, err := c.serviceCatalogClient.ServiceClasses(broker.Namespace).List(listOpts)
 	if err != nil {

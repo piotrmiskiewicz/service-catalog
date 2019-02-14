@@ -100,7 +100,8 @@ func (c *controller) findServiceInstancesOnServiceClass(serviceClass *v1beta1.Se
 		"spec.serviceClassRef.name": serviceClass.Name,
 	}
 	fieldSelector := fields.SelectorFromSet(fieldSet).String()
-	listOpts := metav1.ListOptions{FieldSelector: fieldSelector}
+	_ = metav1.ListOptions{FieldSelector: fieldSelector}
+	listOpts := metav1.ListOptions{}
 
 	return c.serviceCatalogClient.ServiceInstances(serviceClass.Namespace).List(listOpts)
 }

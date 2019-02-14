@@ -720,7 +720,8 @@ func (c *controller) getCurrentServiceClassesAndPlansForBroker(broker *v1beta1.C
 		"spec.clusterServiceBrokerName": broker.Name,
 	}
 	fieldSelector := fields.SelectorFromSet(fieldSet).String()
-	listOpts := metav1.ListOptions{FieldSelector: fieldSelector}
+	_ = metav1.ListOptions{FieldSelector: fieldSelector}
+	listOpts := metav1.ListOptions{}
 
 	existingServiceClasses, err := c.serviceCatalogClient.ClusterServiceClasses().List(listOpts)
 	if err != nil {

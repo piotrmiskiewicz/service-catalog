@@ -102,7 +102,8 @@ func (c *controller) findServiceInstancesOnServicePlan(servicePlan *v1beta1.Serv
 		"spec.servicePlanRef.name": servicePlan.Name,
 	}
 	fieldSelector := fields.SelectorFromSet(fieldSet).String()
-	listOpts := metav1.ListOptions{FieldSelector: fieldSelector}
+	_ = metav1.ListOptions{FieldSelector: fieldSelector}
+	listOpts := metav1.ListOptions{}
 
 	return c.serviceCatalogClient.ServiceInstances(metav1.NamespaceAll).List(listOpts)
 }

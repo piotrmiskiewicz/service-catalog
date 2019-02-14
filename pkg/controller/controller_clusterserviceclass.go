@@ -95,7 +95,8 @@ func (c *controller) findServiceInstancesOnClusterServiceClass(serviceClass *v1b
 		"spec.clusterServiceClassRef.name": serviceClass.Name,
 	}
 	fieldSelector := fields.SelectorFromSet(fieldSet).String()
-	listOpts := metav1.ListOptions{FieldSelector: fieldSelector}
+	_ = metav1.ListOptions{FieldSelector: fieldSelector}
+	listOpts := metav1.ListOptions{}
 
 	return c.serviceCatalogClient.ServiceInstances(metav1.NamespaceAll).List(listOpts)
 }
