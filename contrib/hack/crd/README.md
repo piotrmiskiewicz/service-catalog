@@ -2,36 +2,39 @@
 
 Execute all commands from the cookbook in the `hack` directory.
 
-### Prerequisites
+### Bootstrap local environment for testing
 
-Kyma installed on your cluster but without the ServiceCatalog.
-
-### Steps to run controller locally
-
-1. Register the Service Catalog CRDs
+1. In one shell execute:
 ```bash
-kubectl apply -f ./assets/svc-crds.yaml
+./bin/bootstrap-testing-environment.sh
 ```
 
-2. Register Helm Broker
-```bash
-kubectl apply -f ./assets/helm-broker.yaml
-```
+Under the hood this script is:
+- creating minikube
+- installing tiller
+- installing Service Catalog [CRDs](./assets/svc-crds.yaml)
+- installing Helm Broker
+- installing Binding Usage Controller
+- registering Helm Broker in Service Catalog with http://localhost:8081
+- exposing the Helm Broker to your localhost on port 8081, so your controller in step 2 can access all broker endpoints 
 
-3. Export the name of the HelmBroker Pod.
-```bash
-export HB_POD_NAME=$(kubectl get po -l app=helm-broker -n kyma-system -o jsonpath='{ .items[*].metadata.name }')
-```
-
-4. Expose helm-broker service
-```bash
-kubectl port-forward -n kyma-system pod/${HB_POD_NAME} 8081:8080
-```
-
-5. Run the Service Catalog controller-manager
+2. When step one is finished then on the other shell execute:
 ```bash
 ./bin/run-controller.sh
 ```
+
+**Now you are ready to go!**
+
+When you execute `svcat get classes`, then you should see:
+```bash
+          NAME           NAMESPACE                 DESCRIPTION
++----------------------+-----------+------------------------------------------+
+  azure-service-broker               Extends the Service Catalog with Azure
+                                     services
+  redis                              Redis by Helm Broker (Experimental)
+  gcp-service-broker                 Extends the Service Catalog with Google
+                                     Cloud Platform services
+``` 
 
 ### Testing Scenario
 
@@ -78,3 +81,37 @@ The information and statistics about the Redis server appear.
 - [Design of the Service Catalog](https://svc-cat.io/docs/design/)
 - [Service Catalog Developer Guide](https://svc-cat.io/docs/devguide/)
 - [Service Catalog Code & Documentation Standards](https://svc-cat.io/docs/code-standards/)
+
+
+### Old way of running controller locally
+
+#### Prerequisites
+
+Kyma installed on your cluster but without the ServiceCatalog.
+
+#### Steps
+
+1. Register the Service Catalog CRDs
+```bash
+kubectl apply -f ./assets/svc-crds.yaml
+```
+
+2. Register Helm Broker
+```bash
+kubectl apply -f ./assets/helm-broker.yaml
+```
+
+3. Export the name of the HelmBroker Pod.
+```bash
+export HB_POD_NAME=$(kubectl get po -l app=helm-broker -n kyma-system -o jsonpath='{ .items[*].metadata.name }')
+```
+
+4. Expose helm-broker service
+```bash
+kubectl port-forward -n kyma-system pod/${HB_POD_NAME} 8081:8080
+```
+
+5. Run the Service Catalog controller-manager
+```bash
+./bin/run-controller.sh
+```
