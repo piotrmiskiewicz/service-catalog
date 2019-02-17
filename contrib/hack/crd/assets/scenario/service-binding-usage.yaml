@@ -1,13 +1,11 @@
 apiVersion: servicecatalog.kyma-project.io/v1alpha1
 kind: ServiceBindingUsage
 metadata:
- name: fn-redis-client
+ name: deploy-redis-client
 spec:
  serviceBindingRef:
    name: redis-instance-credential
  usedBy:
-   kind: function
+   kind: deployment
    name: redis-client
- parameters:
-   envPrefix:
-     name: "APP_"
+

@@ -13,6 +13,9 @@ bash ${CURRENT_DIR}/is-ready.sh kube-system name tiller
 echo "- Register Service Catalog CRDs"
 kubectl apply -f  ${CURRENT_DIR}/../assets/svc-crds.yaml
 
+echo "- Installing Pod Preset Helm Chart"
+helm install ${CURRENT_DIR}/../assets/pod-preset-chart.tgz  --name podpreset --namespace kyma-system --wait
+
 echo "- Installing Helm Broker Helm Chart"
 helm install ${CURRENT_DIR}/../assets/helm-broker-chart.tgz  --name helm-broker --namespace kyma-system --wait
 echo "- Installing BUC Helm Chart"

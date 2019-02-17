@@ -19,7 +19,6 @@ package controller
 import (
 	stderrors "errors"
 	"fmt"
-	"github.com/sanity-io/litter"
 	"net/url"
 	"sync"
 	"time"
@@ -1345,7 +1344,7 @@ func (c *controller) resolveClusterServiceClassRef(instance *v1beta1.ServiceInst
 			))
 		} else {
 			return nil, fmt.Errorf(
-				"References a non-existent ClusterServiceClass %c",
+				"UpdateReferencesReferences a non-existent ClusterServiceClass %c",
 				instance.Spec.PlanReference,
 			)
 		}
@@ -1543,7 +1542,7 @@ func (c *controller) resolveClusterServicePlanRef(instance *v1beta1.ServiceInsta
 			return fmt.Errorf("Incorrect item type: %T, should be: *v1beta1.ClusterServiceClass", rawPlan)
 		}
 
-		instance.Spec.ServicePlanRef = &v1beta1.LocalObjectReference{
+		instance.Spec.ClusterServicePlanRef = &v1beta1.ClusterObjectReference{
 			Name: plan.Name,
 		}
 		klog.V(4).Info(pcb.Messagef("resolved %v to ServicePlan (K8S: %q)",
@@ -1857,7 +1856,6 @@ func setServiceInstanceConditionInternal(toUpdate *v1beta1.ServiceInstance,
 func (c *controller) updateServiceInstanceReferences(toUpdate *v1beta1.ServiceInstance) (*v1beta1.ServiceInstance, error) {
 	pcb := pretty.NewInstanceContextBuilder(toUpdate)
 	klog.V(4).Info(pcb.Message("Updating references"))
-	litter.Dump(toUpdate)
 	status := toUpdate.Status
 	updatedInstance, err := c.serviceCatalogClient.ServiceInstances(toUpdate.Namespace).UpdateReferences(toUpdate)
 	if err != nil {

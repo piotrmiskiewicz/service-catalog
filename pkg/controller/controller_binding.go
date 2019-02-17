@@ -25,6 +25,7 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/klog"
 
+	"k8s.io/client-go/util/retry"
 	"github.com/kubernetes-incubator/service-catalog/pkg/apis/servicecatalog/v1beta1"
 	scfeatures "github.com/kubernetes-incubator/service-catalog/pkg/features"
 	"github.com/kubernetes-incubator/service-catalog/pkg/pretty"
@@ -1483,12 +1484,28 @@ func (c *controller) handleServiceBindingReconciliationError(binding *v1beta1.Se
 // updating of a ServiceBinding that has successfully finished graceful
 // deletion.
 func (c *controller) processServiceBindingGracefulDeletionSuccess(binding *v1beta1.ServiceBinding) error {
-	finalizers := sets.NewString(binding.Finalizers...)
-	finalizers.Delete(v1beta1.FinalizerServiceCatalog)
-	binding.Finalizers = finalizers.List()
-
 	if _, err := c.updateServiceBindingStatus(binding); err != nil {
 		return err
+	}
+
+	// TODO(mszostok): add logic for removing finalizers
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		newBinding, err := c.serviceCatalogClient.ServiceBindings(binding.Namespace).Get(binding.Name, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+
+		toUpdate := newBinding.DeepCopy()
+		finalizers := sets.NewString(toUpdate.Finalizers...)
+		finalizers.Delete(v1beta1.FinalizerServiceCatalog)
+		toUpdate.Finalizers = finalizers.List()
+
+		_, err = c.serviceCatalogClient.ServiceBindings(toUpdate.Namespace).Update(toUpdate)
+		return err
+	})
+	if err != nil {
+		// may be conflict if max retries were hit
+		return fmt.Errorf( "while updating ProwJob status: %v", err)
 	}
 
 	pcb := pretty.NewBindingContextBuilder(binding)
