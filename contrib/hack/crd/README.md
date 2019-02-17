@@ -56,7 +56,7 @@ watch -n 1 kubectl get serviceinstance/redis -n $namespace -o jsonpath='{ .statu
 ```bash
 kubectl create -f assets/scenario/redis-instance-binding.yaml -n $namespace
 ```
-5. Create a lambda.
+5. Create a deploy.
 ```bash
 kubectl create -f assets/scenario/redis-client.yaml -n $namespace
 ```
@@ -64,13 +64,17 @@ kubectl create -f assets/scenario/redis-client.yaml -n $namespace
 ```bash
 kubectl create -f assets/scenario/service-binding-usage.yaml -n $namespace
 ```
-7. Wait until the Function is ready.
+7. Wait until the Pod is ready.
 ```bash
-kubeless function ls redis-client --namespace $namespace
+kubectl get po -l app=redis-client -n $namespace -o jsonpath='{ .items[*].status.conditions[?(@.type=="Ready")].status }'
 ```
-9. Trigger the Function.
+8. Export the name of the Pod.
 ```bash
-kubeless function call redis-client --namespace $namespace
+export POD_NAME=$(kubectl get po -l app=redis-client -n $namespace -o jsonpath='{ .items[*].metadata.name }')
+```
+9. Execute the `check-redis` script on the Pod.
+```bash
+kubectl exec ${POD_NAME} -n $namespace /check-redis.sh
 ```
 
 The information and statistics about the Redis server appear.
