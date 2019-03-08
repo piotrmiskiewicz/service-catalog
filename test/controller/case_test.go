@@ -26,6 +26,7 @@ import (
 	beta1 "github.com/kubernetes-incubator/service-catalog/pkg/client/informers_generated/externalversions/servicecatalog/v1beta1"
 	"k8s.io/apimachinery/pkg/labels"
 	"net/http"
+	k8sinformers "k8s.io/client-go/informers"
 )
 
 const (
@@ -69,6 +70,9 @@ func NewControllerTest(t *testing.T) *ControllerTest {
 
 	fakeOSBClient := fakeosb.NewFakeClient(getTestHappyPathBrokerClientConfig())
 
+	coreInformerFactory := k8sinformers.NewSharedInformerFactory(k8sClient, time.Minute)
+	coreInformers := coreInformerFactory.Core()
+
 
 	scClient := fakesc.NewSimpleClientset()
 	informerFactory := scinformers.NewSharedInformerFactory(scClient, 0)
@@ -99,6 +103,7 @@ func NewControllerTest(t *testing.T) *ControllerTest {
 
 	testController, err := controller.NewController(
 		k8sClient,
+		coreInformers.V1().Secrets(),
 		scClient.ServicecatalogV1beta1(),
 		serviceCatalogSharedInformers.ClusterServiceBrokers(),
 		serviceCatalogSharedInformers.ServiceBrokers(),
@@ -124,7 +129,9 @@ func NewControllerTest(t *testing.T) *ControllerTest {
 	// start the controller
 	testCase.stopCh = make(chan struct{})
 	informerFactory.Start(testCase.stopCh)
+	coreInformerFactory.Start(testCase.stopCh)
 	informerFactory.WaitForCacheSync(testCase.stopCh)
+	coreInformerFactory.WaitForCacheSync(testCase.stopCh)
 	go testController.Run(1, testCase.stopCh)
 
 	return testCase

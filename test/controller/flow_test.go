@@ -23,6 +23,8 @@ func TestBasicFlowWithBasicAuth(t *testing.T) {
 	assert.NoError(t, ct.WaitForReadyBroker())
 	ct.CreateSecretWithBasicAuth("user1", "p2sswd")
 	ct.CreateClusterServiceBrokerWithBasicAuth()
+	ct.AssertOSBBasicAuth(t, "user1", "p2sswd")
+
 
 	ct.AssertClusterServiceClassAndPlan(t)
 
