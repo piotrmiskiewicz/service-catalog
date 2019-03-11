@@ -1,4 +1,4 @@
-package it_test
+package controller_test
 
 import (
 	"errors"
@@ -96,8 +96,7 @@ func NewControllerTest(t *testing.T) *ControllerTest {
 	fakeRecorder := record.NewFakeRecorder(1)
 	// start goroutine which flushes events (prevent hanging recording function)
 	go func() {
-		for e := range fakeRecorder.Events {
-			fmt.Println(e)
+		for  range fakeRecorder.Events {
 		}
 	}()
 
@@ -160,7 +159,7 @@ func (ct *ControllerTest) AssertOSBBasicAuth(t *testing.T, username, password st
 	})
 }
 
-func (ct *ControllerTest) SetPollLastOperationInProgressInFirstCalls(numberOfInProgressResponses int) {
+func (ct *ControllerTest) SetOSBPollLastOperationReactionInProgress(numberOfInProgressResponses int) {
 	numberOfPolls := 0
 	ct.fakeOSBClient.PollLastOperationReaction = fakeosb.DynamicPollLastOperationReaction(
 		func(_ *osb.LastOperationRequest) (*osb.LastOperationResponse, error) {
@@ -173,7 +172,7 @@ func (ct *ControllerTest) SetPollLastOperationInProgressInFirstCalls(numberOfInP
 		})
 }
 
-func (ct *ControllerTest) SetProvisionReactionHTTPErrorInFirstCalls(numberOfErrorResponses int) {
+func (ct *ControllerTest) SetOSBProvisionReactionHTTPError(numberOfErrorResponses int) {
 	numberOfPolls := 0
 	ct.fakeOSBClient.ProvisionReaction = fakeosb.DynamicProvisionReaction(
 		func(_ *osb.ProvisionRequest) (*osb.ProvisionResponse, error) {
@@ -183,13 +182,11 @@ func (ct *ControllerTest) SetProvisionReactionHTTPErrorInFirstCalls(numberOfErro
 			}
 			return nil, osb.HTTPStatusCodeError{
 				StatusCode:   http.StatusUnauthorized,
-				//ErrorMessage: strPtr("unauthorized; retry later"),
-				//Description:  strPtr("temporary error that can be retried without orphan mitigation"),
 			}
 		})
 }
 
-func (ct *ControllerTest) SetBindReactionWithHTTPError(code int) {
+func (ct *ControllerTest) SetOSBBindReactionWithHTTPError(code int) {
 	ct.fakeOSBClient.BindReaction = &fakeosb.BindReaction{
 		Error: osb.HTTPStatusCodeError{
 			StatusCode: code,
@@ -332,6 +329,13 @@ func (ct *ControllerTest) WaitForReadyBinding() error {
 	return ct.waitForBindingStatusCondition(v1beta1.ServiceBindingCondition{
 		Type:   v1beta1.ServiceBindingConditionReady,
 		Status: v1beta1.ConditionTrue,
+	})
+}
+
+func (ct *ControllerTest) WaitForNotReadyBinding() error {
+	return ct.waitForBindingStatusCondition(v1beta1.ServiceBindingCondition{
+		Type:   v1beta1.ServiceBindingConditionReady,
+		Status: v1beta1.ConditionFalse,
 	})
 }
 

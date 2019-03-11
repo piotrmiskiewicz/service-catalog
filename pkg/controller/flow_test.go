@@ -1,4 +1,4 @@
-package it_test
+package controller_test
 
 import (
 	"fmt"
@@ -19,31 +19,36 @@ func TestBasicFlowWithBasicAuth(t *testing.T) {
 	ct.CreateSecretWithBasicAuth("user1", "p2sswd")
 	ct.CreateClusterServiceBrokerWithBasicAuth()
 
-	// THEN
 	assert.NoError(t, ct.WaitForReadyBroker())
 	ct.CreateSecretWithBasicAuth("user1", "p2sswd")
 	ct.CreateClusterServiceBrokerWithBasicAuth()
+
+	// THEN
 	ct.AssertOSBBasicAuth(t, "user1", "p2sswd")
-
-
 	ct.AssertClusterServiceClassAndPlan(t)
 
 	// uncomment when the https://github.com/kubernetes-incubator/service-catalog/issues/2563 is fixed
-	ct.UpdateSecretWithBasicAuth("user1", "newp2sswd")
+	//ct.UpdateSecretWithBasicAuth("user1", "newp2sswd")
 
+	// WHEN
 	ct.CreateServiceInstance()
+
+	// THEN
 	assert.NoError(t, ct.WaitForReadyInstance())
 
 	// uncomment when the https://github.com/kubernetes-incubator/service-catalog/issues/2563 is fixed
-	ct.AssertOSBBasicAuth(t, "user1", "newp2sswd")
+	//ct.AssertOSBBasicAuth(t, "user1", "newp2sswd")
 
+	// WHEN
 	ct.CreateBinding()
+	//THEN
 	assert.NoError(t, ct.WaitForReadyBinding())
 
+	// WHEN
 	ct.DeleteBinding()
-
 	ct.DeleteServiceInstance()
 
+	// THEN
 	assert.NoError(t, ct.WaitForServiceInstanceRemoved())
 }
 
@@ -53,7 +58,7 @@ func TestBasicFlow(t *testing.T) {
 		},
 		"async instances with multiple polls": func(ct *ControllerTest) {
 			ct.AsyncForInstances()
-			ct.SetPollLastOperationInProgressInFirstCalls(2)
+			ct.SetOSBPollLastOperationReactionInProgress(2)
 		},
 		"async bindings": func(ct *ControllerTest) {
 			ct.AsyncForBindings()
@@ -74,64 +79,90 @@ func TestBasicFlow(t *testing.T) {
 
 			// WHEN
 			ct.CreateSimpleClusterServiceBroker()
-
 			// THEN
 			assert.NoError(t, ct.WaitForReadyBroker())
-
 			ct.AssertClusterServiceClassAndPlan(t)
 
+			// WHEN
 			ct.CreateServiceInstance()
 			assert.NoError(t, ct.WaitForReadyInstance())
 
+			// WHEN
 			ct.CreateBinding()
-
 			assert.NoError(t, ct.WaitForReadyBinding())
 
+			// WHEN
 			ct.DeleteBinding()
-
 			ct.DeleteServiceInstance()
-
+			// THEN
 			assert.NoError(t, ct.WaitForServiceInstanceRemoved())
 		})
 	}
 }
 
 func TestServiceBindingOrphanMitigation(t *testing.T) {
+	// GIVEN
 	ct := NewControllerTest(t)
 	defer ct.TearDown()
-	ct.SetBindReactionWithHTTPError(http.StatusInternalServerError)
-
-	// WHEN
+	ct.SetOSBBindReactionWithHTTPError(http.StatusInternalServerError)
 	ct.CreateSimpleClusterServiceBroker()
-
 	assert.NoError(t, ct.WaitForReadyBroker())
-
-	ct.AssertClusterServiceClassAndPlan(t)
-
 	ct.CreateServiceInstance()
 	assert.NoError(t, ct.WaitForReadyInstance())
 
+	// WHEN
 	ct.CreateBinding()
 
+	// THEN
 	assert.NoError(t, ct.WaitForBindingOrphanMitigationSuccessful())
 }
 
 func TestServiceBindingFailure(t *testing.T) {
 	ct := NewControllerTest(t)
 	defer ct.TearDown()
-	ct.SetBindReactionWithHTTPError(http.StatusConflict)
-
-	// WHEN
+	ct.SetOSBBindReactionWithHTTPError(http.StatusConflict)
 	ct.CreateSimpleClusterServiceBroker()
-
 	assert.NoError(t, ct.WaitForReadyBroker())
-
 	ct.AssertClusterServiceClassAndPlan(t)
-
 	ct.CreateServiceInstance()
 	assert.NoError(t, ct.WaitForReadyInstance())
 
+	// WHEN
 	ct.CreateBinding()
 
+	// THEN
 	assert.NoError(t, ct.WaitForBindingFailed())
+}
+
+func TestServiceBindingRetryForNonExistingClass(t *testing.T) {
+	ct := NewControllerTest(t)
+	defer ct.TearDown()
+	ct.CreateSimpleClusterServiceBroker()
+	assert.NoError(t, ct.WaitForReadyBroker())
+	ct.AssertClusterServiceClassAndPlan(t)
+
+	// WHEN
+	ct.CreateBinding()
+	assert.NoError(t, ct.WaitForNotReadyBinding())
+	ct.CreateServiceInstance()
+	assert.NoError(t, ct.WaitForReadyInstance())
+
+	// THEN
+	assert.NoError(t, ct.WaitForReadyBinding())
+}
+
+
+func TestProvisionInstanceWithRetries(t *testing.T) {
+	// GIVEN
+	ct := NewControllerTest(t)
+	defer ct.TearDown()
+	ct.SetOSBProvisionReactionHTTPError(1)
+	ct.CreateSimpleClusterServiceBroker()
+	assert.NoError(t, ct.WaitForReadyBroker())
+
+	// WHEN
+	ct.CreateServiceInstance()
+
+	// THEN
+	assert.NoError(t, ct.WaitForReadyInstance())
 }
