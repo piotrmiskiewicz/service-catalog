@@ -18,13 +18,14 @@ package controller_test
 
 import (
 	"fmt"
-	"net/http"
 	"testing"
 
-	scfeatures "github.com/kubernetes-incubator/service-catalog/pkg/features"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+
+	"github.com/kubernetes-incubator/service-catalog/pkg/apis/servicecatalog/v1beta1"
+	scfeatures "github.com/kubernetes-incubator/service-catalog/pkg/features"
 )
 
 // TestBasicFlowWithBasicAuth tests whether the controller uses correct credentials when the secret changes
@@ -56,6 +57,40 @@ func TestBasicFlowWithBasicAuth(t *testing.T) {
 	ct.AssertOSBBasicAuth(t, "user1", "newp2sswd")
 }
 
+// TestOriginatingIdentity tests whether the controller uses correct credentials when the secret changes
+func TestOriginatingIdentity(t *testing.T) {
+	// GIVEN
+	// Enable the OriginatingIdentity feature
+	utilfeature.DefaultFeatureGate.Set(fmt.Sprintf("%v=true", scfeatures.OriginatingIdentity))
+	defer utilfeature.DefaultFeatureGate.Set(fmt.Sprintf("%v=false", scfeatures.OriginatingIdentity))
+
+	ct := newControllerTest(t)
+	defer ct.TearDown()
+	// create a secret with basic auth credentials stored
+	assert.NoError(t, ct.CreateSimpleClusterServiceBroker())
+	assert.NoError(t, ct.WaitForReadyBroker())
+
+	// WHEN
+	assert.NoError(t, ct.CreateServiceInstance())
+	// THEN
+	assert.NoError(t, ct.WaitForReadyInstance())
+
+	// Binding
+	assert.NoError(t, ct.CreateBinding())
+	assert.NoError(t, ct.WaitForReadyBinding())
+	// Unbinding
+	require.NoError(t, ct.Unbind())
+	assert.NoError(t, ct.WaitForUnbindStatus(v1beta1.ServiceBindingUnbindStatusSucceeded))
+	// Deprovisioning
+	assert.NoError(t, ct.DeleteBinding())
+	assert.NoError(t, ct.Deprovision())
+	assert.NoError(t, ct.WaitForDeprovisionStatus(v1beta1.ServiceInstanceDeprovisionStatusSucceeded))
+
+	// THEN
+	ct.AssertOSBRequestsUsername(t)
+}
+
+
 // TestBasicFlow tests
 //
 // - add Broker
@@ -63,20 +98,26 @@ func TestBasicFlowWithBasicAuth(t *testing.T) {
 // - provision Instance
 // - update Instance
 // - make Binding
+// - unbind
+// - deprovision
 func TestBasicFlow(t *testing.T) {
 	for tn, setupFunc := range map[string]func(ts *controllerTest){
 		"sync": func(ts *controllerTest) {
 		},
 		"async instances with multiple polls": func(ct *controllerTest) {
-			ct.AsyncForInstances()
+			ct.AsyncForInstanceProvisioning()
+			ct.AsyncForInstanceDeprovisioning()
 			ct.SetFirstOSBPollLastOperationReactionsInProgress(2)
 		},
 		"async bindings": func(ct *controllerTest) {
-			ct.AsyncForBindings()
+			ct.AsyncForBind()
+			ct.AsyncForUnbind()
 		},
 		"async instances and bindings": func(ct *controllerTest) {
-			ct.AsyncForInstances()
-			ct.AsyncForBindings()
+			ct.AsyncForInstanceProvisioning()
+			ct.AsyncForInstanceDeprovisioning()
+			ct.AsyncForBind()
+			ct.AsyncForUnbind()
 		},
 	} {
 		t.Run(tn, func(t *testing.T) {
@@ -102,6 +143,8 @@ func TestBasicFlow(t *testing.T) {
 			// expected at least one provision call
 			assert.NotZero(t, ct.NumberOfOSBProvisionCalls())
 
+			// Binding
+
 			// WHEN
 			assert.NoError(t, ct.CreateBinding())
 
@@ -109,87 +152,81 @@ func TestBasicFlow(t *testing.T) {
 			assert.NoError(t, ct.WaitForReadyBinding())
 			// expected at least one binding call
 			assert.NotZero(t, ct.NumberOfOSBBindingCalls())
+
+			// Unbinding
+
+			// WHEN
+			require.NoError(t, ct.Unbind())
+
+			// THEN
+			assert.NoError(t, ct.WaitForUnbindStatus(v1beta1.ServiceBindingUnbindStatusSucceeded))
+			assert.NotZero(t, ct.NumberOfOSBUnbindingCalls())
+
+			// Deprovisioning
+
+			// GIVEN
+			// simulate k8s which removes the binding
+			assert.NoError(t, ct.DeleteBinding())
+
+			// WHEN
+			assert.NoError(t, ct.Deprovision())
+
+			// THEN
+			assert.NoError(t, ct.WaitForDeprovisionStatus(v1beta1.ServiceInstanceDeprovisionStatusSucceeded))
+			assert.NotZero(t, ct.NumberOfOSBDeprovisionCalls())
 		})
 	}
 }
 
-// TestServiceBindingOrphanMitigation tests whether a binding has a proper status (OrphanMitigationSuccessful) after
-// a bind request returns a status code that should trigger orphan mitigation.
-func TestServiceBindingOrphanMitigation(t *testing.T) {
+// TestClusterServiceClassRemovedFromCatalogAfterFiltering tests whether catalog restrictions filters service classes
+func TestClusterServiceClassRemovedFromCatalogAfterFiltering(t *testing.T) {
+	t.Parallel()
 	// GIVEN
 	ct := newControllerTest(t)
 	defer ct.TearDown()
-	// configure broker to respond with HTTP 500 for bind operation
-	ct.SetOSBBindReactionWithHTTPError(http.StatusInternalServerError)
-	require.NoError(t, ct.CreateSimpleClusterServiceBroker())
-	require.NoError(t, ct.WaitForReadyBroker())
-	require.NoError(t, ct.CreateServiceInstance())
-	require.NoError(t, ct.WaitForReadyInstance())
-
-	// WHEN
-	ct.CreateBinding()
-
-	// THEN
-	assert.NoError(t, ct.WaitForBindingOrphanMitigationSuccessful())
-}
-
-// TestServiceBindingFailure tests that a binding gets a failure condition when the
-// broker returns a failure response for a bind operation.
-func TestServiceBindingFailure(t *testing.T) {
-	// GIVEN
-	ct := newControllerTest(t)
-	defer ct.TearDown()
-	// configure broker to respond with HTTP 409 for bind operation
-	ct.SetOSBBindReactionWithHTTPError(http.StatusConflict)
-	require.NoError(t, ct.CreateSimpleClusterServiceBroker())
-	require.NoError(t, ct.WaitForReadyBroker())
-	ct.AssertClusterServiceClassAndPlan(t)
-	require.NoError(t, ct.CreateServiceInstance())
-	require.NoError(t, ct.WaitForReadyInstance())
-
-	// WHEN
-	assert.NoError(t, ct.CreateBinding())
-
-	// THEN
-	assert.NoError(t, ct.WaitForBindingFailed())
-}
-
-// TestServiceBindingRetryForNonExistingInstance try to bind to invalid service instance names.
-// After the instance is created - the binding shoul became ready.
-func TestServiceBindingRetryForNonExistingInstance(t *testing.T) {
-	// GIVEN
-	ct := newControllerTest(t)
-	defer ct.TearDown()
-	require.NoError(t, ct.CreateSimpleClusterServiceBroker())
-	require.NoError(t, ct.WaitForReadyBroker())
+	assert.NoError(t, ct.CreateSimpleClusterServiceBroker())
+	assert.NoError(t, ct.WaitForReadyBroker())
 	ct.AssertClusterServiceClassAndPlan(t)
 
 	// WHEN
-	// create a binding for non existing instance
-	assert.NoError(t, ct.CreateBinding())
-	assert.NoError(t, ct.WaitForNotReadyBinding())
-	// create an instance referenced by the binding
-	assert.NoError(t, ct.CreateServiceInstance())
-	assert.NoError(t, ct.WaitForReadyInstance())
+	assert.NoError(t, ct.AddServiceClassRestrictionsToBroker())
 
 	// THEN
-	assert.NoError(t, ct.WaitForReadyBinding())
+	assert.NoError(t, ct.WaitForClusterServiceClassToNotExists())
 }
 
-// TestProvisionInstanceWithRetries tests creating a ServiceInstance
-// with retry after temporary error without orphan mitigation.
-func TestProvisionInstanceWithRetries(t *testing.T) {
+// TestClusterServiceClassRemovedFromCatalogWithoutInstances tests whether a class marked as removed
+// is removed by the controller.
+func TestClusterServiceClassRemovedFromCatalogWithoutInstances(t *testing.T) {
+	t.Parallel()
 	// GIVEN
 	ct := newControllerTest(t)
 	defer ct.TearDown()
-	// configure first provision response with HTTP error
-	ct.SetFirstOSBProvisionReactionsHTTPError(1, http.StatusConflict)
-	require.NoError(t, ct.CreateSimpleClusterServiceBroker())
-	require.NoError(t, ct.WaitForReadyBroker())
+	assert.NoError(t, ct.CreateSimpleClusterServiceBroker())
+	assert.NoError(t, ct.WaitForReadyBroker())
+	ct.AssertClusterServiceClassAndPlan(t)
 
 	// WHEN
-	assert.NoError(t, ct.CreateServiceInstance())
+	ct.MarkClusterServiceClassRemoved()
 
 	// THEN
-	assert.NoError(t, ct.WaitForReadyInstance())
+	assert.NoError(t, ct.WaitForClusterServiceClassToNotExists())
+}
+
+// TestClusterServiceClassRemovedFromCatalogWithoutInstances tests whether a plan marked as removed
+// is removed by the controller.
+func TestClusterServicePlanRemovedFromCatalogWithoutInstances(t *testing.T) {
+	t.Parallel()
+	// GIVEN
+	ct := newControllerTest(t)
+	defer ct.TearDown()
+	assert.NoError(t, ct.CreateSimpleClusterServiceBroker())
+	assert.NoError(t, ct.WaitForReadyBroker())
+	ct.AssertClusterServiceClassAndPlan(t)
+
+	// WHEN
+	ct.MarkClusterServicePlanRemoved()
+
+	// THEN
+	assert.NoError(t, ct.WaitForClusterServicePlanToNotExists())
 }

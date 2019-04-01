@@ -17,11 +17,12 @@ limitations under the License.
 package controller_test
 
 import (
-	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"encoding/json"
+	"errors"
 	"github.com/kubernetes-incubator/service-catalog/pkg/apis/servicecatalog/v1beta1"
 	fakesc "github.com/kubernetes-incubator/service-catalog/pkg/client/clientset_generated/clientset/fake"
 	scinterface "github.com/kubernetes-incubator/service-catalog/pkg/client/clientset_generated/clientset/typed/servicecatalog/v1beta1"
@@ -36,6 +37,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	k8sinformers "k8s.io/client-go/informers"
 	fakek8s "k8s.io/client-go/kubernetes/fake"
@@ -56,6 +58,7 @@ const (
 	testBindingName                       = "test-binding"
 	testServiceBindingGUID                = "bguid"
 	authSecretName                        = "basic-secret-name"
+	testUsername                          = "some-user"
 
 	pollingInterval = 50 * time.Millisecond
 	pollingTimeout  = 8 * time.Second
@@ -108,6 +111,8 @@ func newControllerTest(t *testing.T) *controllerTest {
 	// start goroutine which flushes events (prevent hanging recording function)
 	go func() {
 		for range fakeRecorder.Events {
+			// uncomment to see events
+			//t.Log(err)
 		}
 	}()
 
@@ -124,7 +129,7 @@ func newControllerTest(t *testing.T) *controllerTest {
 		plansInformer,
 		serviceCatalogSharedInformers.ServicePlans(),
 		brokerClFunc,
-		24*time.Hour,
+		time.Second,
 		osb.LatestAPIVersion().HeaderValue(),
 		fakeRecorder,
 		7*24*time.Hour,
@@ -153,19 +158,39 @@ func (ct *controllerTest) TearDown() {
 	close(ct.stopCh)
 }
 
-// AsyncForInstances configures all fake OSB client instance operations (provision, update and deprovision)
+// AsyncForInstanceProvisioning configures all fake OSB client provision
 // responses with async flag
-func (ct *controllerTest) AsyncForInstances() {
+func (ct *controllerTest) AsyncForInstanceProvisioning() {
 	ct.fakeOSBClient.ProvisionReaction.(*fakeosb.ProvisionReaction).Response.Async = true
+}
+
+// AsyncForInstanceUpdate configures all fake OSB client update
+// responses with async flag
+func (ct *controllerTest) AsyncForInstanceUpdate() {
 	ct.fakeOSBClient.UpdateInstanceReaction.(*fakeosb.UpdateInstanceReaction).Response.Async = true
+}
+
+// AsyncForInstanceDeprovisioning configures all fake OSB client deprovision
+// responses with async flag
+func (ct *controllerTest) AsyncForInstanceDeprovisioning() {
 	ct.fakeOSBClient.DeprovisionReaction.(*fakeosb.DeprovisionReaction).Response.Async = true
 }
 
-// AsyncForInstances configures all fake OSB client binding operations (bind and unbind)
-// responses with async flag
-func (ct *controllerTest) AsyncForBindings() {
-	ct.fakeOSBClient.BindReaction.(*fakeosb.BindReaction).Response.Async = true
+// AsyncForUnbind configures fake OSB client unbind operation responses with async flag
+func (ct *controllerTest) AsyncForUnbind() {
 	ct.fakeOSBClient.UnbindReaction.(*fakeosb.UnbindReaction).Response.Async = true
+}
+
+// AsyncForBind configures fake OSB client bind operation responses with async flag
+func (ct *controllerTest) AsyncForBind() {
+	ct.fakeOSBClient.BindReaction.(*fakeosb.BindReaction).Response.Async = true
+}
+
+// SyncForBindings configures all fake OSB client binding operations (bind and unbind)
+// responses with async flag to false
+func (ct *controllerTest) SyncForBindings() {
+	ct.fakeOSBClient.BindReaction.(*fakeosb.BindReaction).Response.Async = false
+	ct.fakeOSBClient.UnbindReaction.(*fakeosb.UnbindReaction).Response.Async = false
 }
 
 // AssertOSBBasicAuth verifies the last call to broker whether the correct basic auth credentials was used
@@ -207,6 +232,8 @@ func (ct *controllerTest) numberOfOSBActionByType(actionType fakeosb.ActionType)
 // SetFirstOSBPollLastOperationReactionsInProgress makes the broker
 // responses inProgress in first numberOfInProgressResponses calls
 func (ct *controllerTest) SetFirstOSBPollLastOperationReactionsInProgress(numberOfInProgressResponses int) {
+	ct.fakeOSBClient.Lock()
+	defer ct.fakeOSBClient.Unlock()
 	numberOfPolls := 0
 	ct.fakeOSBClient.PollLastOperationReaction = fakeosb.DynamicPollLastOperationReaction(
 		func(_ *osb.LastOperationRequest) (*osb.LastOperationResponse, error) {
@@ -219,9 +246,48 @@ func (ct *controllerTest) SetFirstOSBPollLastOperationReactionsInProgress(number
 		})
 }
 
+// SetOSBPollLastOperationReactionsState makes the broker
+// responses with given state
+func (ct *controllerTest) SetOSBPollLastOperationReactionsState(state osb.LastOperationState) {
+	ct.fakeOSBClient.Lock()
+	defer ct.fakeOSBClient.Unlock()
+	ct.fakeOSBClient.PollLastOperationReaction = &fakeosb.PollLastOperationReaction{
+		Response: &osb.LastOperationResponse{State: state},
+	}
+}
+
+// SetOSBPollBindingLastOperationReactionsState makes the broker
+// responses with given state
+func (ct *controllerTest) SetOSBPollBindingLastOperationReactionsState(state osb.LastOperationState) {
+	ct.fakeOSBClient.Lock()
+	defer ct.fakeOSBClient.Unlock()
+	ct.fakeOSBClient.PollBindingLastOperationReaction = &fakeosb.PollBindingLastOperationReaction{
+		Response: &osb.LastOperationResponse{State: state},
+	}
+}
+
+// SetFirstOSBPollLastOperationReactionsInProgress makes the broker
+// responses inProgress in first numberOfInProgressResponses calls
+func (ct *controllerTest) SetFirstOSBPollLastOperationReactionsFailed(numberOfFailedResponses int) {
+	ct.fakeOSBClient.Lock()
+	defer ct.fakeOSBClient.Unlock()
+	numberOfPolls := 0
+	ct.fakeOSBClient.PollLastOperationReaction = fakeosb.DynamicPollLastOperationReaction(
+		func(_ *osb.LastOperationRequest) (*osb.LastOperationResponse, error) {
+			numberOfPolls++
+			state := osb.StateFailed
+			if numberOfPolls > numberOfFailedResponses {
+				state = osb.StateSucceeded
+			}
+			return &osb.LastOperationResponse{State: state}, nil
+		})
+}
+
 // SetFirstOSBProvisionReactionsHTTPError makes the broker
 // responses with error in first numberOfInProgressResponses calls
 func (ct *controllerTest) SetFirstOSBProvisionReactionsHTTPError(numberOfErrorResponses int, code int) {
+	ct.fakeOSBClient.Lock()
+	defer ct.fakeOSBClient.Unlock()
 	numberOfPolls := 0
 	ct.fakeOSBClient.ProvisionReaction = fakeosb.DynamicProvisionReaction(
 		func(_ *osb.ProvisionRequest) (*osb.ProvisionResponse, error) {
@@ -235,8 +301,28 @@ func (ct *controllerTest) SetFirstOSBProvisionReactionsHTTPError(numberOfErrorRe
 		})
 }
 
+// SetFirstOSBUnbindReactionsHTTPError makes the broker
+// responses with error in first numberOfErrorResponses calls
+func (ct *controllerTest) SetFirstOSBUnbindReactionsHTTPError(numberOfErrorResponses int, code int) {
+	ct.fakeOSBClient.Lock()
+	defer ct.fakeOSBClient.Unlock()
+	numberOfPolls := 0
+	ct.fakeOSBClient.UnbindReaction = fakeosb.DynamicUnbindReaction(
+		func(_ *osb.UnbindRequest) (*osb.UnbindResponse, error) {
+			numberOfPolls++
+			if numberOfPolls > numberOfErrorResponses {
+				return &osb.UnbindResponse{}, nil
+			}
+			return nil, osb.HTTPStatusCodeError{
+				StatusCode: code,
+			}
+		})
+}
+
 // SetOSBBindReactionWithHTTPError configures the broker Bind call response as HTTPStatusCodeError
 func (ct *controllerTest) SetOSBBindReactionWithHTTPError(code int) {
+	ct.fakeOSBClient.Lock()
+	defer ct.fakeOSBClient.Unlock()
 	ct.fakeOSBClient.BindReaction = &fakeosb.BindReaction{
 		Error: osb.HTTPStatusCodeError{
 			StatusCode: code,
@@ -266,11 +352,13 @@ func (ct *controllerTest) fixClusterServiceBroker() *v1beta1.ClusterServiceBroke
 	}
 }
 
+// CreateSimpleClusterServiceBroker creates a ClusterServiceBroker used in testing scenarios.
 func (ct *controllerTest) CreateSimpleClusterServiceBroker() error {
 	_, err := ct.scInterface.ClusterServiceBrokers().Create(ct.fixClusterServiceBroker())
 	return err
 }
 
+// CreateClusterServiceBrokerWithBasicAuth creates a ClusterServiceBroker with basic auth.
 func (ct *controllerTest) CreateClusterServiceBrokerWithBasicAuth() error {
 	csb := ct.fixClusterServiceBroker()
 	csb.Spec.AuthInfo = &v1beta1.ClusterServiceBrokerAuthInfo{
@@ -285,10 +373,33 @@ func (ct *controllerTest) CreateClusterServiceBrokerWithBasicAuth() error {
 	return err
 }
 
+// AddServiceClassRestrictionsToBroker updates a broker with a restrictions, which must filter out all existing classes.
+func (ct *controllerTest) AddServiceClassRestrictionsToBroker() error {
+	classes, err := ct.scInterface.ClusterServiceClasses().List(metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+	var restrictions []string
+	for _, cl := range classes.Items {
+		restrictions = append(restrictions, fmt.Sprintf("name!=%s", cl.Name))
+	}
+
+	csb, err := ct.scInterface.ClusterServiceBrokers().Get(testClusterServiceBrokerName, metav1.GetOptions{})
+	csb.Spec.CatalogRestrictions = &v1beta1.CatalogRestrictions{
+		ServiceClass: restrictions,
+	}
+	csb.Generation = csb.Generation + 1
+	_, err = ct.scInterface.ClusterServiceBrokers().Update(csb)
+	return err
+}
+
+// CreateServiceInstance creates a ServiceInstance which is used in testing scenarios.
 func (ct *controllerTest) CreateServiceInstance() error {
 	_, err := ct.scInterface.ServiceInstances(testNamespace).Create(&v1beta1.ServiceInstance{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: testServiceInstanceName,
+			// added by a Webhook, which is not tested here
+			Finalizers: []string{v1beta1.FinalizerServiceCatalog},
 		},
 		Spec: v1beta1.ServiceInstanceSpec{
 			PlanReference: v1beta1.PlanReference{
@@ -303,13 +414,40 @@ func (ct *controllerTest) CreateServiceInstance() error {
 			ClusterServiceClassRef: &v1beta1.ClusterObjectReference{
 				Name: testClassExternalID,
 			},
+			UserInfo: fixtureUserInfo(),
 		},
 	})
 	return err
 }
 
-func (ct *controllerTest) DeleteServiceInstance() error {
-	return ct.scInterface.ServiceInstances(testNamespace).Delete(testServiceInstanceName, &v1.DeleteOptions{})
+func (ct *controllerTest) UpdateServiceInstanceParameters() error {
+	si, err := ct.scInterface.ServiceInstances(testNamespace).Get(testServiceInstanceName, metav1.GetOptions{})
+	if err != nil {
+		return nil
+	}
+	parameters := map[string]interface{}{
+		"param-key": "new-param-value",
+	}
+	marshalledParams, err := json.Marshal(parameters)
+	if err != nil {
+		return fmt.Errorf("failed to marshal parameters %v : %v", parameters, err)
+	}
+	si.Spec.Parameters = &runtime.RawExtension{Raw: marshalledParams}
+	si.Generation = si.Generation + 1
+
+	_, err = ct.scInterface.ServiceInstances(testNamespace).Update(si)
+	return err
+}
+
+// Deprovision sets deletion timestamp which is done by K8s in a cluster while ServiceInstance deletion.
+func (ct *controllerTest) Deprovision() error {
+	si, err := ct.scInterface.ServiceInstances(testNamespace).Get(testServiceInstanceName, v1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	si.DeletionTimestamp = ct.v1Now()
+	_, err = ct.scInterface.ServiceInstances(testNamespace).Update(si)
+	return err
 }
 
 func (ct *controllerTest) CreateBinding() error {
@@ -326,15 +464,30 @@ func (ct *controllerTest) CreateBinding() error {
 			},
 			ExternalID: testServiceBindingGUID,
 			SecretName: testBindingName, // set by the webhook
+			UserInfo: fixtureUserInfo(),
 		},
 	})
 	return err
 }
 
+// Unbind sets deletion timestamp which is done by K8s in a cluster. It triggers unbinding process.
+func (ct *controllerTest) Unbind() error {
+	sb, err := ct.scInterface.ServiceBindings(testNamespace).Get(testBindingName, v1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	sb.DeletionTimestamp = ct.v1Now()
+	_, err = ct.scInterface.ServiceBindings(testNamespace).Update(sb)
+	return err
+}
+
+// DeleteBinding removes the ServiceBinding resource.
 func (ct *controllerTest) DeleteBinding() error {
 	return ct.scInterface.ServiceBindings(testNamespace).Delete(testBindingName, &v1.DeleteOptions{})
 }
 
+// CreateSecretWithBasicAuth creates a secret with credentials
+// referenced by a ClusterServiceBroker created by CreateClusterServiceBrokerWithBasicAuth method.
 func (ct *controllerTest) CreateSecretWithBasicAuth(username, password string) error {
 	_, err := ct.k8sClient.CoreV1().Secrets(testNamespace).Create(&corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -349,6 +502,7 @@ func (ct *controllerTest) CreateSecretWithBasicAuth(username, password string) e
 	return err
 }
 
+// UpdateSecretWithBasicAuth updates a secret with basic auth
 func (ct *controllerTest) UpdateSecretWithBasicAuth(username, password string) error {
 	_, err := ct.k8sClient.CoreV1().Secrets(testNamespace).Update(&corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -360,6 +514,28 @@ func (ct *controllerTest) UpdateSecretWithBasicAuth(username, password string) e
 			v1beta1.BasicAuthPasswordKey: []byte(password),
 		},
 	})
+	return err
+}
+
+// MarkClusterServiceClassRemoved marks the cluster service class to be removed (sets the RemovedFromBrokerCatalog flag to true)
+func (ct *controllerTest) MarkClusterServiceClassRemoved() error {
+	csc, err := ct.scInterface.ClusterServiceClasses().Get(testClassExternalID, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	csc.Status.RemovedFromBrokerCatalog = true
+	_, err = ct.scInterface.ClusterServiceClasses().UpdateStatus(csc)
+	return err
+}
+
+// MarkClusterServicePlanRemoved marks the cluster service plan to be removed (sets the RemovedFromBrokerCatalog flag to true)
+func (ct *controllerTest) MarkClusterServicePlanRemoved() error {
+	csp, err := ct.scInterface.ClusterServicePlans().Get(testPlanExternalID, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	csp.Status.RemovedFromBrokerCatalog = true
+	_, err = ct.scInterface.ClusterServicePlans().UpdateStatus(csp)
 	return err
 }
 
@@ -395,6 +571,14 @@ func (ct *controllerTest) WaitForNotReadyBinding() error {
 	})
 }
 
+func (ct *controllerTest) WaitForBindingInProgress() error {
+	return ct.waitForBindingStatusCondition(v1beta1.ServiceBindingCondition{
+		Type:   v1beta1.ServiceBindingConditionReady,
+		Status: v1beta1.ConditionFalse,
+		Reason: "Binding",
+	})
+}
+
 func (ct *controllerTest) WaitForBindingOrphanMitigationSuccessful() error {
 	return ct.waitForBindingStatusCondition(v1beta1.ServiceBindingCondition{
 		Type:   v1beta1.ServiceBindingConditionReady,
@@ -408,6 +592,49 @@ func (ct *controllerTest) WaitForBindingFailed() error {
 		Type:   v1beta1.ServiceBindingConditionFailed,
 		Status: v1beta1.ConditionTrue,
 	})
+}
+
+func (ct *controllerTest) WaitForUnbindStatus(status v1beta1.ServiceBindingUnbindStatus) error {
+	var lastBinding *v1beta1.ServiceBinding
+	err := wait.PollImmediate(pollingInterval, pollingTimeout, func() (bool, error) {
+		binding, err := ct.scInterface.ServiceBindings(testNamespace).Get(testBindingName, v1.GetOptions{})
+		if err != nil {
+			return false, fmt.Errorf("error getting Binding: %v", err)
+		}
+
+		if binding.Status.UnbindStatus == status {
+			return true, nil
+		}
+
+		lastBinding = binding
+		return false, nil
+	})
+	if err == wait.ErrWaitTimeout {
+		return fmt.Errorf("binding with proper unbinding status not found, the existing binding status: %+v", lastBinding.Status)
+	}
+	return err
+}
+
+func (ct *controllerTest) WaitForDeprovisionStatus(status v1beta1.ServiceInstanceDeprovisionStatus) error {
+	var lastInstance *v1beta1.ServiceInstance
+	err := wait.PollImmediate(pollingInterval, pollingTimeout, func() (bool, error) {
+		si, err := ct.scInterface.ServiceInstances(testNamespace).Get(testServiceInstanceName, v1.GetOptions{})
+		if err != nil {
+			return false, fmt.Errorf("error getting Binding: %v", err)
+		}
+
+		if si.Status.DeprovisionStatus == status {
+			return true, nil
+		}
+
+		lastInstance = si
+		return false, nil
+	})
+	if err == wait.ErrWaitTimeout {
+		return fmt.Errorf("service instance with proper deprovision status not found, "+
+			"the existing service instance status: %+v", lastInstance.Status)
+	}
+	return err
 }
 
 func (ct *controllerTest) waitForBindingStatusCondition(condition v1beta1.ServiceBindingCondition) error {
@@ -451,16 +678,26 @@ func (ct *controllerTest) WaitForServiceInstanceRemoved() error {
 }
 
 func (ct *controllerTest) WaitForReadyInstance() error {
-	condition := v1beta1.ServiceInstanceCondition{
+	return ct.waitForInstanceCondition(v1beta1.ServiceInstanceCondition{
 		Type:   v1beta1.ServiceInstanceConditionReady,
 		Status: v1beta1.ConditionTrue,
-	}
+	})
+}
 
+func (ct *controllerTest) WaitForInstanceUpdating() error {
+	return ct.waitForInstanceCondition(v1beta1.ServiceInstanceCondition{
+		Type:   v1beta1.ServiceInstanceConditionReady,
+		Status: v1beta1.ConditionFalse,
+		Reason: "UpdatingInstance",
+	})
+}
+
+func (ct *controllerTest) waitForInstanceCondition(condition v1beta1.ServiceInstanceCondition) error {
 	var lastInstance *v1beta1.ServiceInstance
 	err := wait.PollImmediate(pollingInterval, pollingTimeout, func() (bool, error) {
 		instance, err := ct.scInterface.ServiceInstances(testNamespace).Get(testServiceInstanceName, v1.GetOptions{})
 		if err != nil {
-			return false, fmt.Errorf("error getting Broker: %v", err)
+			return false, fmt.Errorf("error getting Instance: %v", err)
 		}
 		lastInstance = instance
 
@@ -474,7 +711,28 @@ func (ct *controllerTest) WaitForReadyInstance() error {
 		return false, nil
 	})
 	if err == wait.ErrWaitTimeout {
-		return fmt.Errorf("the instance is not ready, current status: %+v", lastInstance.Status)
+		return fmt.Errorf("the instance is in expected state (expected condition %+v), current status: %+v", condition, lastInstance.Status)
+	}
+	return err
+}
+
+func (ct *controllerTest) WaitForAsyncProvisioningInProgress() error {
+	var lastInstance *v1beta1.ServiceInstance
+	err := wait.PollImmediate(pollingInterval, pollingTimeout, func() (bool, error) {
+		instance, err := ct.scInterface.ServiceInstances(testNamespace).Get(testServiceInstanceName, v1.GetOptions{})
+		if err != nil {
+			return false, fmt.Errorf("error getting ServiceInstance: %v", err)
+		}
+		lastInstance = instance
+
+		if instance.Status.AsyncOpInProgress {
+			return true, nil
+		}
+
+		return false, nil
+	})
+	if err == wait.ErrWaitTimeout {
+		return fmt.Errorf("the instance is not in progress, current status: %+v", lastInstance.Status)
 	}
 	return err
 }
@@ -520,6 +778,28 @@ func (ct *controllerTest) WaitForClusterServiceClass() error {
 	})
 }
 
+func (ct *controllerTest) WaitForClusterServiceClassToNotExists() error {
+	return wait.PollImmediate(pollingInterval, pollingTimeout, func() (bool, error) {
+		_, err := ct.scInterface.ClusterServiceClasses().Get(testClassExternalID, v1.GetOptions{})
+		if err != nil && apierrors.IsNotFound(err) {
+			return true, nil
+		}
+
+		return false, err
+	})
+}
+
+func (ct *controllerTest) WaitForClusterServicePlanToNotExists() error {
+	return wait.PollImmediate(pollingInterval, pollingTimeout, func() (bool, error) {
+		_, err := ct.scInterface.ClusterServicePlans().Get(testPlanExternalID, v1.GetOptions{})
+		if err != nil && apierrors.IsNotFound(err) {
+			return true, nil
+		}
+
+		return false, err
+	})
+}
+
 func (ct *controllerTest) WaitForClusterServicePlan() error {
 	err := wait.PollImmediate(pollingInterval, pollingTimeout, func() (bool, error) {
 		_, err := ct.scInterface.ClusterServicePlans().Get(testPlanExternalID, v1.GetOptions{})
@@ -537,6 +817,42 @@ func (ct *controllerTest) WaitForClusterServicePlan() error {
 		return fmt.Errorf("plan %v not found, existing plans: %v", testPlanExternalID, plans)
 	}
 	return err
+}
+
+func (ct *controllerTest) AssertOSBRequestsUsername(t *testing.T) {
+	for _, action := range ct.fakeOSBClient.Actions() {
+		var oi *osb.OriginatingIdentity
+		switch request := action.Request.(type) {
+		case *osb.ProvisionRequest:
+			oi = request.OriginatingIdentity
+		case *osb.UpdateInstanceRequest:
+			oi = request.OriginatingIdentity
+		case *osb.DeprovisionRequest:
+			oi = request.OriginatingIdentity
+		case *osb.BindRequest:
+			oi = request.OriginatingIdentity
+		case *osb.UnbindRequest:
+			oi = request.OriginatingIdentity
+		case *osb.LastOperationRequest:
+			oi = request.OriginatingIdentity
+		default:
+			continue
+		}
+
+		require.NotNil(t, oi, "originating identity of the request %v must not be nil", action.Type)
+
+		oiValues := make(map[string]interface{})
+		require.NoError(t, json.Unmarshal([]byte(oi.Value), &oiValues))
+
+		if e, a := testUsername, oiValues["username"]; e != a {
+			t.Fatalf("unexpected username in originating identity: expected %q, got %q", e, a)
+		}
+	}
+}
+
+func (ct *controllerTest) v1Now() *metav1.Time {
+	n := v1.NewTime(time.Now())
+	return &n
 }
 
 func fixtureHappyPathBrokerClientConfig() fakeosb.FakeClientConfiguration {
@@ -614,6 +930,12 @@ func fixtureBindCredentials() map[string]interface{} {
 	return map[string]interface{}{
 		"foo": "bar",
 		"baz": "zap",
+	}
+}
+
+func fixtureUserInfo() *v1beta1.UserInfo{
+	return &v1beta1.UserInfo{
+		Username: testUsername,
 	}
 }
 
