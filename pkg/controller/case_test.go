@@ -231,6 +231,8 @@ func (ct *controllerTest) numberOfOSBActionByType(actionType fakeosb.ActionType)
 // SetFirstOSBPollLastOperationReactionsInProgress makes the broker
 // responses inProgress in first numberOfInProgressResponses calls
 func (ct *controllerTest) SetFirstOSBPollLastOperationReactionsInProgress(numberOfInProgressResponses int) {
+	ct.fakeOSBClient.Lock()
+	defer ct.fakeOSBClient.Unlock()
 	numberOfPolls := 0
 	ct.fakeOSBClient.PollLastOperationReaction = fakeosb.DynamicPollLastOperationReaction(
 		func(_ *osb.LastOperationRequest) (*osb.LastOperationResponse, error) {
@@ -246,6 +248,8 @@ func (ct *controllerTest) SetFirstOSBPollLastOperationReactionsInProgress(number
 // SetOSBPollLastOperationReactionsState makes the broker
 // responses with given state
 func (ct *controllerTest) SetOSBPollLastOperationReactionsState(state osb.LastOperationState) {
+	ct.fakeOSBClient.Lock()
+	defer ct.fakeOSBClient.Unlock()
 	ct.fakeOSBClient.PollLastOperationReaction = &fakeosb.PollLastOperationReaction{
 		Response: &osb.LastOperationResponse{State: state},
 	}
@@ -254,6 +258,8 @@ func (ct *controllerTest) SetOSBPollLastOperationReactionsState(state osb.LastOp
 // SetOSBPollBindingLastOperationReactionsState makes the broker
 // responses with given state
 func (ct *controllerTest) SetOSBPollBindingLastOperationReactionsState(state osb.LastOperationState) {
+	ct.fakeOSBClient.Lock()
+	defer ct.fakeOSBClient.Unlock()
 	ct.fakeOSBClient.PollBindingLastOperationReaction = &fakeosb.PollBindingLastOperationReaction{
 		Response: &osb.LastOperationResponse{State: state},
 	}
@@ -262,6 +268,8 @@ func (ct *controllerTest) SetOSBPollBindingLastOperationReactionsState(state osb
 // SetFirstOSBPollLastOperationReactionsInProgress makes the broker
 // responses inProgress in first numberOfInProgressResponses calls
 func (ct *controllerTest) SetFirstOSBPollLastOperationReactionsFailed(numberOfFailedResponses int) {
+	ct.fakeOSBClient.Lock()
+	defer ct.fakeOSBClient.Unlock()
 	numberOfPolls := 0
 	ct.fakeOSBClient.PollLastOperationReaction = fakeosb.DynamicPollLastOperationReaction(
 		func(_ *osb.LastOperationRequest) (*osb.LastOperationResponse, error) {
@@ -277,6 +285,8 @@ func (ct *controllerTest) SetFirstOSBPollLastOperationReactionsFailed(numberOfFa
 // SetFirstOSBProvisionReactionsHTTPError makes the broker
 // responses with error in first numberOfInProgressResponses calls
 func (ct *controllerTest) SetFirstOSBProvisionReactionsHTTPError(numberOfErrorResponses int, code int) {
+	ct.fakeOSBClient.Lock()
+	defer ct.fakeOSBClient.Unlock()
 	numberOfPolls := 0
 	ct.fakeOSBClient.ProvisionReaction = fakeosb.DynamicProvisionReaction(
 		func(_ *osb.ProvisionRequest) (*osb.ProvisionResponse, error) {
@@ -293,6 +303,8 @@ func (ct *controllerTest) SetFirstOSBProvisionReactionsHTTPError(numberOfErrorRe
 // SetFirstOSBUnbindReactionsHTTPError makes the broker
 // responses with error in first numberOfErrorResponses calls
 func (ct *controllerTest) SetFirstOSBUnbindReactionsHTTPError(numberOfErrorResponses int, code int) {
+	ct.fakeOSBClient.Lock()
+	defer ct.fakeOSBClient.Unlock()
 	numberOfPolls := 0
 	ct.fakeOSBClient.UnbindReaction = fakeosb.DynamicUnbindReaction(
 		func(_ *osb.UnbindRequest) (*osb.UnbindResponse, error) {
@@ -308,6 +320,8 @@ func (ct *controllerTest) SetFirstOSBUnbindReactionsHTTPError(numberOfErrorRespo
 
 // SetOSBBindReactionWithHTTPError configures the broker Bind call response as HTTPStatusCodeError
 func (ct *controllerTest) SetOSBBindReactionWithHTTPError(code int) {
+	ct.fakeOSBClient.Lock()
+	defer ct.fakeOSBClient.Unlock()
 	ct.fakeOSBClient.BindReaction = &fakeosb.BindReaction{
 		Error: osb.HTTPStatusCodeError{
 			StatusCode: code,
