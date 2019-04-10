@@ -27,6 +27,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	fakeosb "github.com/pmorie/go-open-service-broker-client/v2/fake"
+	osb "github.com/pmorie/go-open-service-broker-client/v2"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	corev1 "k8s.io/api/core/v1"
+	"encoding/json"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // TestServiceBindingOrphanMitigation tests whether a binding has a proper status (OrphanMitigationSuccessful) after
@@ -192,4 +198,547 @@ func TestDeleteServiceBindingFailureRetryAsync(t *testing.T) {
 	// THEN
 	// we expect to retry unbind with a success
 	assert.NoError(t, ct.WaitForUnbindStatus(v1beta1.ServiceBindingUnbindStatusSucceeded))
+}
+
+// TestCreateServiceBindingInstanceNotReady bind to a service instance in the ready false state.
+func TestCreateServiceBindingInstanceNotReady(t *testing.T) {
+	// GIVEN
+	ct := newControllerTest(t)
+	defer ct.TearDown()
+	// let's make provisioning failing
+	ct.SetOSBProvisionReactionWithHTTPError(http.StatusBadGateway)
+	require.NoError(t, ct.CreateSimpleClusterServiceBroker())
+	require.NoError(t, ct.WaitForReadyBroker())
+	ct.AssertClusterServiceClassAndPlan(t)
+	assert.NoError(t, ct.CreateServiceInstance())
+
+	// WHEN
+	assert.NoError(t, ct.CreateBinding())
+
+	// THEN
+	assert.NoError(t, ct.waitForBindingStatusCondition(v1beta1.ServiceBindingCondition{
+		Type:   v1beta1.ServiceBindingConditionReady,
+		Status: v1beta1.ConditionFalse,
+		Reason: "ErrorInstanceNotReady",
+	}))
+}
+
+// TestCreateServiceBindingInvalidInstanceFailure try to bind to invalid service instance names
+func TestCreateServiceBindingInvalidInstanceFailure(t *testing.T) {
+	// GIVEN
+	ct := newControllerTest(t)
+	defer ct.TearDown()
+	// let's make provisioning failing
+	ct.SetOSBProvisionReactionWithHTTPError(http.StatusBadGateway)
+	require.NoError(t, ct.CreateSimpleClusterServiceBroker())
+	require.NoError(t, ct.WaitForReadyBroker())
+	ct.AssertClusterServiceClassAndPlan(t)
+	assert.NoError(t, ct.CreateServiceInstance())
+
+	// WHEN
+	assert.NoError(t, ct.CreateBinding())
+
+	// THEN
+	assert.NoError(t, ct.waitForBindingStatusCondition(v1beta1.ServiceBindingCondition{
+		Type:   v1beta1.ServiceBindingConditionReady,
+		Status: v1beta1.ConditionFalse,
+		Reason: "ErrorInstanceNotReady",
+	}))
+}
+
+// TestCreateServiceBindingNonBindable bind to a non-bindable service class / plan.
+func TestCreateServiceBindingNonBindable(t *testing.T) {
+	// GIVEN
+	ct := newControllerTest(t)
+	defer ct.TearDown()
+	require.NoError(t, ct.CreateSimpleClusterServiceBroker())
+	require.NoError(t, ct.WaitForReadyBroker())
+	ct.AssertClusterServiceClassAndPlan(t)
+	assert.NoError(t, ct.CreateServiceInstanceWithNonbindablePlan())
+
+	// WHEN
+	assert.NoError(t, ct.CreateBinding())
+
+	// THEN
+	assert.NoError(t, ct.waitForBindingStatusCondition(v1beta1.ServiceBindingCondition{
+		Type:   v1beta1.ServiceBindingConditionReady,
+		Status: v1beta1.ConditionFalse,
+		Reason: "ErrorNonbindableServiceClass",
+	}))
+}
+
+// TestCreateServiceBindingWithParameters tests creating a ServiceBinding
+// with parameters.
+func TestCreateServiceBindingWithParameters(t *testing.T) {
+	type secretDef struct {
+		name string
+		data map[string][]byte
+	}
+	cases := []struct {
+		name           string
+		params         map[string]interface{}
+		paramsFrom     []v1beta1.ParametersFromSource
+		secrets        []secretDef
+		expectedParams map[string]interface{}
+		expectedError  bool
+	}{
+		{
+			name:           "no params",
+			expectedParams: nil,
+		},
+		{
+			name: "plain params",
+			params: map[string]interface{}{
+				"Name": "test-param",
+				"Args": map[string]interface{}{
+					"first":  "first-arg",
+					"second": "second-arg",
+				},
+			},
+			expectedParams: map[string]interface{}{
+				"Name": "test-param",
+				"Args": map[string]interface{}{
+					"first":  "first-arg",
+					"second": "second-arg",
+				},
+			},
+		},
+		{
+			name: "secret params",
+			paramsFrom: []v1beta1.ParametersFromSource{
+				{
+					SecretKeyRef: &v1beta1.SecretKeyReference{
+						Name: "secret-name",
+						Key:  "secret-key",
+					},
+				},
+			},
+			secrets: []secretDef{
+				{
+					name: "secret-name",
+					data: map[string][]byte{
+						"secret-key": []byte(`{"A":"B","C":{"D":"E","F":"G"}}`),
+					},
+				},
+			},
+			expectedParams: map[string]interface{}{
+				"A": "B",
+				"C": map[string]interface{}{
+					"D": "E",
+					"F": "G",
+				},
+			},
+		},
+		{
+			name: "plain and secret params",
+			params: map[string]interface{}{
+				"Name": "test-param",
+				"Args": map[string]interface{}{
+					"first":  "first-arg",
+					"second": "second-arg",
+				},
+			},
+			paramsFrom: []v1beta1.ParametersFromSource{
+				{
+					SecretKeyRef: &v1beta1.SecretKeyReference{
+						Name: "secret-name",
+						Key:  "secret-key",
+					},
+				},
+			},
+			secrets: []secretDef{
+				{
+					name: "secret-name",
+					data: map[string][]byte{
+						"secret-key": []byte(`{"A":"B","C":{"D":"E","F":"G"}}`),
+					},
+				},
+			},
+			expectedParams: map[string]interface{}{
+				"Name": "test-param",
+				"Args": map[string]interface{}{
+					"first":  "first-arg",
+					"second": "second-arg",
+				},
+				"A": "B",
+				"C": map[string]interface{}{
+					"D": "E",
+					"F": "G",
+				},
+			},
+		},
+		{
+			name: "missing secret",
+			paramsFrom: []v1beta1.ParametersFromSource{
+				{
+					SecretKeyRef: &v1beta1.SecretKeyReference{
+						Name: "secret-name",
+						Key:  "secret-key",
+					},
+				},
+			},
+			expectedError: true,
+		},
+		{
+			name: "missing secret key",
+			paramsFrom: []v1beta1.ParametersFromSource{
+				{
+					SecretKeyRef: &v1beta1.SecretKeyReference{
+						Name: "secret-name",
+						Key:  "other-secret-key",
+					},
+				},
+			},
+			secrets: []secretDef{
+				{
+					name: "secret-name",
+					data: map[string][]byte{
+						"secret-key": []byte(`bad`),
+					},
+				},
+			},
+			expectedError: true,
+		},
+		{
+			name: "empty secret data",
+			paramsFrom: []v1beta1.ParametersFromSource{
+				{
+					SecretKeyRef: &v1beta1.SecretKeyReference{
+						Name: "secret-name",
+						Key:  "secret-key",
+					},
+				},
+			},
+			secrets: []secretDef{
+				{
+					name: "secret-name",
+					data: map[string][]byte{},
+				},
+			},
+			expectedError: true,
+		},
+		{
+			name: "bad secret data",
+			paramsFrom: []v1beta1.ParametersFromSource{
+				{
+					SecretKeyRef: &v1beta1.SecretKeyReference{
+						Name: "secret-name",
+						Key:  "secret-key",
+					},
+				},
+			},
+			secrets: []secretDef{
+				{
+					name: "secret-name",
+					data: map[string][]byte{
+						"secret-key": []byte(`bad`),
+					},
+				},
+			},
+			expectedError: true,
+		},
+		{
+			name: "no params in secret data",
+			paramsFrom: []v1beta1.ParametersFromSource{
+				{
+					SecretKeyRef: &v1beta1.SecretKeyReference{
+						Name: "secret-name",
+						Key:  "secret-key",
+					},
+				},
+			},
+			secrets: []secretDef{
+				{
+					name: "secret-name",
+					data: map[string][]byte{
+						"secret-key": []byte(`{}`),
+					},
+				},
+			},
+			expectedParams: nil,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			// GIVEN
+			ct := newControllerTest(t)
+			defer ct.TearDown()
+			require.NoError(t, ct.CreateSimpleClusterServiceBroker())
+			require.NoError(t, ct.WaitForReadyBroker())
+			ct.AssertClusterServiceClassAndPlan(t)
+			assert.NoError(t, ct.CreateServiceInstance())
+			for _, secret := range tc.secrets {
+				ct.CreateSecret(secret.name, secret.data)
+			}
+			assert.NoError(t, ct.WaitForReadyInstance())
+
+			// WHEN
+			assert.NoError(t, ct.CreateBindingWithParams(tc.params, tc.paramsFrom))
+
+			// THEN
+			if tc.expectedError {
+				assert.NoError(t, ct.waitForBindingStatusCondition(v1beta1.ServiceBindingCondition{
+					Type:   v1beta1.ServiceBindingConditionReady,
+					Status: v1beta1.ConditionFalse,
+					Reason: "ErrorWithParameters",
+				}))
+			} else {
+				assert.NoError(t, ct.WaitForReadyBinding())
+				ct.AssertLastBindRequest(t, tc.expectedParams)
+			}
+		})
+	}
+}
+
+// TestCreateServiceBindingWithSecretTransform tests creating a ServiceBinding
+// that includes a SecretTransform.
+func TestCreateServiceBindingWithSecretTransform(t *testing.T) {
+	type secretDef struct {
+		name string
+		data map[string][]byte
+	}
+	cases := []struct {
+		name               string
+		secrets            []secretDef
+		secretTransforms   []v1beta1.SecretTransform
+		expectedSecretData map[string][]byte
+	}{
+		{
+			name:             "no transform",
+			secretTransforms: nil,
+			expectedSecretData: map[string][]byte{
+				"foo": []byte("bar"),
+				"baz": []byte("zap"),
+			},
+		},
+		{
+			name: "rename non-existent key",
+			secretTransforms: []v1beta1.SecretTransform{
+				{
+					RenameKey: &v1beta1.RenameKeyTransform{
+						From: "non-existent-key",
+						To:   "bar",
+					},
+				},
+			},
+			expectedSecretData: map[string][]byte{
+				"foo": []byte("bar"),
+				"baz": []byte("zap"),
+			},
+		},
+		{
+			name: "multiple transforms",
+			secrets: []secretDef{
+				{
+					name: "other-secret",
+					data: map[string][]byte{
+						"key-from-other-secret": []byte("qux"),
+					},
+				},
+			},
+			secretTransforms: []v1beta1.SecretTransform{
+				{
+					AddKey: &v1beta1.AddKeyTransform{
+						Key:         "addedStringValue",
+						StringValue: strPtr("stringValue"),
+					},
+				},
+				{
+					AddKey: &v1beta1.AddKeyTransform{
+						Key:   "addedByteArray",
+						Value: []byte("byteArray"),
+					},
+				},
+				{
+					AddKey: &v1beta1.AddKeyTransform{
+						Key:                "valueFromJSONPath",
+						JSONPathExpression: strPtr("{.foo}"),
+					},
+				},
+				{
+					RenameKey: &v1beta1.RenameKeyTransform{
+						From: "foo",
+						To:   "bar",
+					},
+				},
+				{
+					AddKeysFrom: &v1beta1.AddKeysFromTransform{
+						SecretRef: &v1beta1.ObjectReference{
+							Name:      "other-secret",
+							Namespace: testNamespace,
+						},
+					},
+				},
+				{
+					RemoveKey: &v1beta1.RemoveKeyTransform{
+						Key: "baz",
+					},
+				},
+			},
+			expectedSecretData: map[string][]byte{
+				"addedStringValue":      []byte("stringValue"),
+				"addedByteArray":        []byte("byteArray"),
+				"valueFromJSONPath":     []byte("bar"),
+				"bar":                   []byte("bar"),
+				"key-from-other-secret": []byte("qux"),
+			},
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			// GIVEN
+			ct := newControllerTest(t)
+			defer ct.TearDown()
+			require.NoError(t, ct.CreateSimpleClusterServiceBroker())
+			require.NoError(t, ct.WaitForReadyBroker())
+			ct.AssertClusterServiceClassAndPlan(t)
+			assert.NoError(t, ct.CreateServiceInstance())
+			for _, secret := range tc.secrets {
+				ct.CreateSecret(secret.name, secret.data)
+			}
+			assert.NoError(t, ct.WaitForReadyInstance())
+
+			// WHEN
+			assert.NoError(t, ct.CreateBindingWithTransforms(tc.secretTransforms))
+			assert.NoError(t, ct.WaitForReadyBinding())
+
+			// THEN
+			ct.AssertBindingData(t, tc.expectedSecretData)
+		})
+	}
+}
+
+// TODO: move to case_test.go
+// AssertBindingData verifies the secret created by the binding - checks stored secret data.
+func (ct *controllerTest) AssertBindingData(t *testing.T, expectedData map[string][]byte) {
+	s, err := ct.k8sClient.CoreV1().Secrets(testNamespace).Get(testBindingName, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, expectedData, s.Data)
+}
+
+// TODO: move to case_test.go
+func (ct *controllerTest) CreateBindingWithTransforms(transforms []v1beta1.SecretTransform) error {
+	_, err := ct.scInterface.ServiceBindings(testNamespace).Create(&v1beta1.ServiceBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:  testNamespace,
+			Name:       testBindingName,
+			Generation: 1,
+			Finalizers: []string{v1beta1.FinalizerServiceCatalog}, // set by the Webhook
+		},
+		Spec: v1beta1.ServiceBindingSpec{
+			InstanceRef: v1beta1.LocalObjectReference{
+				Name: testServiceInstanceName,
+			},
+			ExternalID: testServiceBindingGUID,
+			SecretName: testBindingName, // set by the webhook
+			SecretTransforms: transforms,
+		},
+	})
+	return err
+}
+
+// TODO: move to case_test.go
+func (ct *controllerTest) AssertLastBindRequest(t *testing.T, expectedParams map[string]interface{}) {
+	actions := ct.fakeOSBClient.Actions()
+	t.Log(actions)
+	for i := len(actions) - 1; i >= 0; i-- {
+		action := actions[i]
+		if action.Type == fakeosb.Bind {
+			bindReq := action.Request.(*osb.BindRequest)
+			assert.Equal(t, expectedParams, bindReq.Parameters)
+			return
+		}
+	}
+}
+
+// TODO: move to case_test.go
+// CreateServiceInstance creates a ServiceInstance which is used in testing scenarios.
+func (ct *controllerTest) CreateServiceInstanceWithNonbindablePlan() error {
+	_, err := ct.scInterface.ServiceInstances(testNamespace).Create(&v1beta1.ServiceInstance{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: testServiceInstanceName,
+			// added by a Webhook, which is not tested here
+			Finalizers: []string{v1beta1.FinalizerServiceCatalog},
+		},
+		Spec: v1beta1.ServiceInstanceSpec{
+			PlanReference: v1beta1.PlanReference{
+				ClusterServiceClassExternalName: testClassExternalID,
+				ClusterServicePlanExternalName:  testNonbindablePlanExternalID,
+			},
+			ExternalID: testExternalID,
+			// Plan and Class refs are added by a Webhook, which is not tested here
+			ClusterServicePlanRef: &v1beta1.ClusterObjectReference{
+				Name: testNonbindablePlanExternalID,
+			},
+			ClusterServiceClassRef: &v1beta1.ClusterObjectReference{
+				Name: testClassExternalID,
+			},
+		},
+	})
+	return err
+}
+
+// TODO: move to case_test.go
+// SetOSBProvisionReactionWithHTTPError configures the broker Provision call response as HTTPStatusCodeError
+func (ct *controllerTest) SetOSBProvisionReactionWithHTTPError(code int) {
+	ct.fakeOSBClient.Lock()
+	defer ct.fakeOSBClient.Unlock()
+	ct.fakeOSBClient.ProvisionReaction = &fakeosb.ProvisionReaction{
+		Error: osb.HTTPStatusCodeError{
+			StatusCode: code,
+		},
+	}
+}
+
+// TODO: move to case_test.go
+// CreateSecret creates a secret with given name and stored data
+func (ct *controllerTest) CreateSecret(name string, data map[string][]byte) error {
+	_, err := ct.k8sClient.CoreV1().Secrets(testNamespace).Create(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: testNamespace,
+			Name:      name,
+		},
+		Data: data,
+	})
+	return err
+}
+
+
+// TODO: move to case_test.go
+func (ct *controllerTest) CreateBindingWithParams(params map[string]interface{}, paramsFrom []v1beta1.ParametersFromSource) error {
+	var parameters *runtime.RawExtension
+	if params != nil {
+		marshaledParams, err := json.Marshal(params)
+		if err != nil {
+			return err
+		}
+		parameters = &runtime.RawExtension{Raw: marshaledParams}
+	}
+	_, err := ct.scInterface.ServiceBindings(testNamespace).Create(&v1beta1.ServiceBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:  testNamespace,
+			Name:       testBindingName,
+			Generation: 1,
+			Finalizers: []string{v1beta1.FinalizerServiceCatalog}, // set by the Webhook
+		},
+		Spec: v1beta1.ServiceBindingSpec{
+			InstanceRef: v1beta1.LocalObjectReference{
+				Name: testServiceInstanceName,
+			},
+			ExternalID: testServiceBindingGUID,
+			SecretName: testBindingName, // set by the webhook
+			Parameters: parameters,
+			ParametersFrom: paramsFrom,
+		},
+	})
+	return err
+}
+
+// strPtr, String Pointer, returns the address of s. useful for filling struct
+// fields that require a *string (for json decoding purposes).
+func strPtr(s string) *string {
+	return &s
 }

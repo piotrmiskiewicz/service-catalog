@@ -58,6 +58,7 @@ const (
 	testBindingName                       = "test-binding"
 	testServiceBindingGUID                = "bguid"
 	authSecretName                        = "basic-secret-name"
+	testUsername                          = "some-user"
 
 	pollingInterval = 50 * time.Millisecond
 	pollingTimeout  = 8 * time.Second
@@ -413,6 +414,7 @@ func (ct *controllerTest) CreateServiceInstance() error {
 			ClusterServiceClassRef: &v1beta1.ClusterObjectReference{
 				Name: testClassExternalID,
 			},
+			UserInfo: fixtureUserInfo(),
 		},
 	})
 	return err
@@ -462,6 +464,7 @@ func (ct *controllerTest) CreateBinding() error {
 			},
 			ExternalID: testServiceBindingGUID,
 			SecretName: testBindingName, // set by the webhook
+			UserInfo: fixtureUserInfo(),
 		},
 	})
 	return err
@@ -815,6 +818,38 @@ func (ct *controllerTest) WaitForClusterServicePlan() error {
 	}
 	return err
 }
+
+func (ct *controllerTest) AssertOSBRequestsUsername(t *testing.T) {
+	for _, action := range ct.fakeOSBClient.Actions() {
+		var oi *osb.OriginatingIdentity
+		switch request := action.Request.(type) {
+		case *osb.ProvisionRequest:
+			oi = request.OriginatingIdentity
+		case *osb.UpdateInstanceRequest:
+			oi = request.OriginatingIdentity
+		case *osb.DeprovisionRequest:
+			oi = request.OriginatingIdentity
+		case *osb.BindRequest:
+			oi = request.OriginatingIdentity
+		case *osb.UnbindRequest:
+			oi = request.OriginatingIdentity
+		case *osb.LastOperationRequest:
+			oi = request.OriginatingIdentity
+		default:
+			continue
+		}
+
+		require.NotNil(t, oi, "originating identity of the request %v must not be nil", action.Type)
+
+		oiValues := make(map[string]interface{})
+		require.NoError(t, json.Unmarshal([]byte(oi.Value), &oiValues))
+
+		if e, a := testUsername, oiValues["username"]; e != a {
+			t.Fatalf("unexpected username in originating identity: expected %q, got %q", e, a)
+		}
+	}
+}
+
 func (ct *controllerTest) v1Now() *metav1.Time {
 	n := v1.NewTime(time.Now())
 	return &n
@@ -895,6 +930,12 @@ func fixtureBindCredentials() map[string]interface{} {
 	return map[string]interface{}{
 		"foo": "bar",
 		"baz": "zap",
+	}
+}
+
+func fixtureUserInfo() *v1beta1.UserInfo{
+	return &v1beta1.UserInfo{
+		Username: testUsername,
 	}
 }
 
