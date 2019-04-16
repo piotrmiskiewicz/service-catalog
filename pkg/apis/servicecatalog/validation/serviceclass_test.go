@@ -21,7 +21,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/kubernetes-incubator/service-catalog/pkg/apis/servicecatalog"
+	servicecatalog "github.com/kubernetes-incubator/service-catalog/pkg/apis/servicecatalog/v1beta1"
 )
 
 func validClusterServiceClass() *servicecatalog.ClusterServiceClass {
