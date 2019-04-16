@@ -24,7 +24,6 @@ import (
 
 	"github.com/kubernetes-incubator/service-catalog/pkg/apis/servicecatalog/v1beta1"
 	"github.com/pmorie/go-open-service-broker-client/v2"
-	fakeosb "github.com/pmorie/go-open-service-broker-client/v2/fake"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -152,7 +151,7 @@ func TestCreateServiceInstanceFailsWithNonexistentPlan(t *testing.T) {
 	defer ct.TearDown()
 
 	ct.SetupEmptyPlanListForOSBClient()
-	require.NoError(t, ct.CreateServiceBrokerWithIncreaseRelistRequests())
+	require.NoError(t, ct.CreateSimpleClusterServiceBroker())
 	require.NoError(t, ct.WaitForReadyBroker())
 
 	// WHEN
@@ -539,14 +538,13 @@ func TestCreateServiceInstanceWithProvisionFailure(t *testing.T) {
 			}
 			require.NoError(t, ct.WaitForInstanceCondition(condition))
 
-			// Assert that the latest generation has been observed
-			// compared to original test this `ObservedGeneration` should be equal to 0
+			// In original test next step is making sure that the latest generation has been observed
+			// it means `ObservedGeneration` parameters should be equal 1, here `ObservedGeneration` is equal 0
 			// because in original test apiserver is used and its functionality set `instance.Generation` to 1
-			// inside file `pkg/registry/servicecatalog/instance/strategy.go` method `PrepareForCreate()`
-			// in this test the `instance.Generation` is not update so in `pkg/controller/controller_instance.go`
+			// inside file `pkg/registry/servicecatalog/instance/strategy.go` method `PrepareForCreate()`.
+			// In this test the `instance.Generation` is not update so in `pkg/controller/controller_instance.go`
 			// in method `reconcileServiceInstanceAdd` will not increase `ObservedGeneration` value
 			// because `instance.Status.ObservedGeneration != instance.Generation` condition is not met
-			require.NoError(t, ct.EnsureInstanceObservedGeneration(0))
 
 			// If the provision failed with a terminating failure
 			if state.failReason != "" {
@@ -555,24 +553,15 @@ func TestCreateServiceInstanceWithProvisionFailure(t *testing.T) {
 					Status: v1beta1.ConditionTrue,
 					Reason: state.failReason,
 				}
-				require.NoError(t, ct.EnsureServiceInstanceHasCondition(condition))
-				require.NoError(t, ct.EnsureBrokerActionNotExist(fakeosb.DeprovisionInstance))
+				require.NoError(t, ct.WaitForInstanceCondition(condition))
+				assert.Zero(t, ct.NumberOfOSBDeprovisionCalls())
 
 				return
 			}
 
 			// Assert that the orphan mitigation reason was set correctly
 			if state.orphanMitigation {
-				if state.orphanMitigationReason == "" {
-					state.orphanMitigationReason = "ProvisionCallFailed"
-				}
-				condition = v1beta1.ServiceInstanceCondition{
-					Type:   v1beta1.ServiceInstanceConditionOrphanMitigation,
-					Status: v1beta1.ConditionTrue,
-					Reason: state.orphanMitigationReason,
-				}
-				require.NoError(t, ct.EnsureServiceInstanceHasCondition(condition))
-				require.NoError(t, ct.EnsureServiceInstanceOrphanMitigationStatus(true))
+				require.NoError(t, ct.AssertServiceInstanceOrphanMitigationStatus(true))
 				blockDeprovisioning <- false
 
 				condition = v1beta1.ServiceInstanceCondition{
@@ -586,8 +575,8 @@ func TestCreateServiceInstanceWithProvisionFailure(t *testing.T) {
 					Type:   v1beta1.ServiceInstanceConditionOrphanMitigation,
 					Status: v1beta1.ConditionFalse,
 				}
-				require.NoError(t, ct.EnsureServiceInstanceHasNoCondition(condition))
-				require.NoError(t, ct.EnsureServiceInstanceOrphanMitigationStatus(false))
+				require.NoError(t, ct.AssertServiceInstanceHasNoCondition(condition))
+				require.NoError(t, ct.AssertServiceInstanceOrphanMitigationStatus(false))
 			}
 
 			ct.SetSuccessfullyReactionForProvisioningToOSBClient()
@@ -603,14 +592,14 @@ func TestCreateServiceInstanceWithProvisionFailure(t *testing.T) {
 
 			// Assert that the observed generation is up-to-date, that orphan mitigation is not in progress,
 			// and that the instance is not in a failed state.
-			require.NoError(t, ct.EnsureObservedGenerationIsCorrect())
-			require.NoError(t, ct.EnsureServiceInstanceOrphanMitigationStatus(false))
+			require.NoError(t, ct.AssertObservedGenerationIsCorrect())
+			require.NoError(t, ct.AssertServiceInstanceOrphanMitigationStatus(false))
 			condition = v1beta1.ServiceInstanceCondition{
 				Type:   v1beta1.ServiceInstanceConditionFailed,
 				Status: v1beta1.ConditionFalse,
 			}
-			require.NoError(t, ct.EnsureServiceInstanceHasNoCondition(condition))
-			require.NoError(t, ct.EnsureBrokerActionExist(fakeosb.ProvisionInstance))
+			require.NoError(t, ct.AssertServiceInstanceHasNoCondition(condition))
+			assert.NotZero(t, ct.NumberOfOSBProvisionCalls())
 		})
 	}
 }
@@ -683,8 +672,8 @@ func TestUpdateServiceInstanceChangePlans(t *testing.T) {
 			require.NoError(t, ct.WaitForServiceInstanceProcessedGeneration(generation))
 
 			// THEN
-			require.NoError(t, ct.EnsureBrokerActionExist(fakeosb.UpdateInstance))
-			require.NoError(t, ct.EnsureLastUpdateBrokerActionHasCorrectPlan(testOtherPlanExternalID))
+			assert.NotZero(t, ct.NumberOfOSBUpdateCalls())
+			require.NoError(t, ct.AssertLastOSBUpdatePlanID())
 		})
 	}
 }
@@ -735,11 +724,14 @@ func TestUpdateServiceInstanceNewDashboardResponse(t *testing.T) {
 			ct := newControllerTest(t)
 			defer ct.TearDown()
 
+			if state.enableFeatureGate {
+				ct.SetProvisionServiceInstanceResponseWithDashboardURL()
+			}
+
 			require.NoError(t, ct.CreateSimpleClusterServiceBroker())
 			require.NoError(t, ct.WaitForReadyBroker())
 
 			// WHEN
-			ct.SetUpdateServiceInstanceResponseWithDashboardURL()
 			require.NoError(t, ct.CreateServiceInstance())
 
 			// THEN
@@ -749,7 +741,12 @@ func TestUpdateServiceInstanceNewDashboardResponse(t *testing.T) {
 				Reason: "ProvisionedSuccessfully",
 			}
 			require.NoError(t, ct.WaitForInstanceCondition(condition))
-			require.NoError(t, ct.CheckFeatureGate(state.enableFeatureGate))
+
+			if state.enableFeatureGate {
+				require.NoError(t, ct.AssertServiceInstanceDashboardURL())
+			} else {
+				require.NoError(t, ct.AssertServiceInstanceEmptyDashboardURL())
+			}
 		})
 	}
 }
@@ -899,8 +896,8 @@ func TestUpdateServiceInstanceUpdateParameters(t *testing.T) {
 			require.NoError(t, ct.WaitForServiceInstanceProcessedGeneration(generation))
 
 			// THEN
-			require.NoError(t, ct.EnsureBrokerActionExist(fakeosb.UpdateInstance))
-			require.NoError(t, ct.EnsureBrokerActionWithParametersExist(state.expectedParams))
+			assert.NotZero(t, ct.NumberOfOSBUpdateCalls())
+			require.NoError(t, ct.AssertBrokerActionWithParametersExist(state.expectedParams))
 		})
 	}
 }

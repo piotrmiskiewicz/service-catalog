@@ -29,7 +29,6 @@ import (
 	scinterface "github.com/kubernetes-incubator/service-catalog/pkg/client/clientset_generated/clientset/typed/servicecatalog/v1beta1"
 	scinformers "github.com/kubernetes-incubator/service-catalog/pkg/client/informers_generated/externalversions"
 	"github.com/kubernetes-incubator/service-catalog/pkg/controller"
-	scfeatures "github.com/kubernetes-incubator/service-catalog/pkg/features"
 	"github.com/pmorie/go-open-service-broker-client/v2"
 	osb "github.com/pmorie/go-open-service-broker-client/v2"
 	fakeosb "github.com/pmorie/go-open-service-broker-client/v2/fake"
@@ -41,7 +40,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	k8sinformers "k8s.io/client-go/informers"
 	fakek8s "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/record"
@@ -224,6 +222,10 @@ func (ct *controllerTest) NumberOfOSBBindingCalls() int {
 
 func (ct *controllerTest) NumberOfOSBProvisionCalls() int {
 	return ct.numberOfOSBActionByType(fakeosb.ProvisionInstance)
+}
+
+func (ct *controllerTest) NumberOfOSBUpdateCalls() int {
+	return ct.numberOfOSBActionByType(fakeosb.UpdateInstance)
 }
 
 func (ct *controllerTest) NumberOfOSBDeprovisionCalls() int {
@@ -902,21 +904,6 @@ func (ct *controllerTest) SetupEmptyPlanListForOSBClient() {
 	}
 }
 
-// CreateServiceBrokerWithIncreaseRelistRequests creates ServiceBroker then increase by one `spec.relistRequests` field
-// and updates the ServiceBroker
-func (ct *controllerTest) CreateServiceBrokerWithIncreaseRelistRequests() error {
-	broker := ct.fixClusterServiceBroker()
-	_, err := ct.scInterface.ClusterServiceBrokers().Create(broker)
-	if err != nil {
-		return err
-	}
-
-	broker.Spec.RelistRequests++
-	_, err = ct.scInterface.ClusterServiceBrokers().Update(broker)
-
-	return err
-}
-
 // WaitForInstanceCondition waits until ServiceInstance `status.conditions` field value is equal to condition in parameters
 // returns error if the time limit has been reached
 func (ct *controllerTest) WaitForInstanceCondition(condition v1beta1.ServiceInstanceCondition) error {
@@ -978,8 +965,8 @@ func isServiceInstanceConditionTrue(instance *v1beta1.ServiceInstance) bool {
 	return false
 }
 
-// EnsureServiceInstanceHasNoCondition makes sure ServiceInstance is in not specific condition
-func (ct *controllerTest) EnsureServiceInstanceHasNoCondition(cond v1beta1.ServiceInstanceCondition) error {
+// AssertServiceInstanceHasNoCondition makes sure ServiceInstance is in not specific condition
+func (ct *controllerTest) AssertServiceInstanceHasNoCondition(cond v1beta1.ServiceInstanceCondition) error {
 	instance, err := ct.scInterface.ServiceInstances(testNamespace).Get(testServiceInstanceName, v1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("error getting Instance: %v", err)
@@ -998,37 +985,8 @@ func (ct *controllerTest) EnsureServiceInstanceHasNoCondition(cond v1beta1.Servi
 	return nil
 }
 
-// EnsureServiceInstanceHasCondition makes sure is in specific condition
-func (ct *controllerTest) EnsureServiceInstanceHasCondition(cond v1beta1.ServiceInstanceCondition) error {
-	instance, err := ct.scInterface.ServiceInstances(testNamespace).Get(testServiceInstanceName, v1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("error getting Instance: %v", err)
-	}
-
-	foundCondition := false
-	for _, condition := range instance.Status.Conditions {
-		if condition.Type == cond.Type {
-			foundCondition = true
-			if condition.Status != cond.Status {
-				return fmt.Errorf(
-					"condition had unexpected status; expected %v, got %v", cond.Status, condition.Status)
-			}
-			if condition.Reason != cond.Reason {
-				return fmt.Errorf(
-					"unexpected reason; expected %v, got %v", cond.Reason, condition.Reason)
-			}
-		}
-	}
-
-	if !foundCondition {
-		return fmt.Errorf("condition not found: %v", cond.Type)
-	}
-
-	return nil
-}
-
-// EnsureServiceInstanceOrphanMitigationStatus makes sure ServiceInstance is/or is not in Orphan Mitigation progress
-func (ct *controllerTest) EnsureServiceInstanceOrphanMitigationStatus(state bool) error {
+// AssertServiceInstanceOrphanMitigationStatus makes sure ServiceInstance is/or is not in Orphan Mitigation progress
+func (ct *controllerTest) AssertServiceInstanceOrphanMitigationStatus(state bool) error {
 	instance, err := ct.scInterface.ServiceInstances(testNamespace).Get(testServiceInstanceName, v1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("error getting Instance: %v", err)
@@ -1281,23 +1239,9 @@ func (ct *controllerTest) CreateServiceInstanceWithInvalidParameters() error {
 	return nil
 }
 
-// EnsureInstanceObservedGeneration makes sure ServiceInstance status `ObservedGeneration` parameter is not
-// equal to generation argument
-func (ct *controllerTest) EnsureInstanceObservedGeneration(gen int64) error {
-	instance, err := ct.scInterface.ServiceInstances(testNamespace).Get(testServiceInstanceName, v1.GetOptions{})
-	if err != nil {
-		return err
-	}
-	if val := instance.Status.ObservedGeneration; val != gen {
-		return fmt.Errorf("unexpected observed generation: expected %v, got %v", gen, val)
-	}
-
-	return nil
-}
-
-// EnsureObservedGenerationIsCorrect makes sure ServiceInstance status `ObservedGeneration` parameter is not
+// AssertObservedGenerationIsCorrect makes sure ServiceInstance status `ObservedGeneration` parameter is not
 // equal to ServiceInstance `Generation` parameter
-func (ct *controllerTest) EnsureObservedGenerationIsCorrect() error {
+func (ct *controllerTest) AssertObservedGenerationIsCorrect() error {
 	instance, err := ct.scInterface.ServiceInstances(testNamespace).Get(testServiceInstanceName, v1.GetOptions{})
 	if err != nil {
 		return err
@@ -1381,33 +1325,20 @@ func (ct *controllerTest) SetSuccessfullyReactionForDeprovisioningToOSBClient() 
 		})
 }
 
-// EnsureBrokerActionExist makes sure specific fake osb client action exist
-func (ct *controllerTest) EnsureBrokerActionExist(actionType fakeosb.ActionType) error {
-	actions := ct.fakeOSBClient.Actions()
-	for _, action := range actions {
-		if action.Type == actionType {
+// AssertLastOSBUpdatePlanID makes sure osb client action with type "UpdateInstance"
+// contains specific plan ID in request body parameters
+func (ct *controllerTest) AssertLastOSBUpdatePlanID() error {
+	for _, planID := range ct.fetchAllPlansFromUpdateActions() {
+		if planID == testOtherPlanExternalID {
 			return nil
 		}
 	}
 
-	return fmt.Errorf("expected broker action %q not exist", actionType)
+	return fmt.Errorf("expected ServicePlan %q not exist", testOtherPlanExternalID)
 }
 
-// EnsureBrokerActionNotExist makes sure specific fake osb client action not exist
-func (ct *controllerTest) EnsureBrokerActionNotExist(actionType fakeosb.ActionType) error {
-	actions := ct.fakeOSBClient.Actions()
-	for _, action := range actions {
-		if action.Type == actionType {
-			return fmt.Errorf("expected broker action %q exist", actionType)
-		}
-	}
-
-	return nil
-}
-
-// EnsureLastUpdateBrokerActionHasCorrectPlan makes sure osb client action with type "UpdateInstance"
-// contains specific plan ID in request body parameters
-func (ct *controllerTest) EnsureLastUpdateBrokerActionHasCorrectPlan(planID string) error {
+func (ct *controllerTest) fetchAllPlansFromUpdateActions() []string {
+	var plans []string
 	actions := ct.fakeOSBClient.Actions()
 	for _, action := range actions {
 		if action.Type == fakeosb.UpdateInstance {
@@ -1415,20 +1346,17 @@ func (ct *controllerTest) EnsureLastUpdateBrokerActionHasCorrectPlan(planID stri
 			if request.PlanID == nil {
 				continue
 			}
-			if p, rp := planID, *request.PlanID; p != rp {
-				continue
-			}
 
-			return nil
+			plans = append(plans, *request.PlanID)
 		}
 	}
 
-	return fmt.Errorf("expected ServicePlan %q not exist", planID)
+	return plans
 }
 
-// EnsureBrokerActionWithParametersExist makes sure osb client action with type "UpdateInstance"
+// AssertBrokerActionWithParametersExist makes sure osb client action with type "UpdateInstance"
 // contains specific parameters in request body parameters
-func (ct *controllerTest) EnsureBrokerActionWithParametersExist(parameters map[string]interface{}) error {
+func (ct *controllerTest) AssertBrokerActionWithParametersExist(parameters map[string]interface{}) error {
 	actions := ct.fakeOSBClient.Actions()
 	for _, action := range actions {
 		if action.Type != fakeosb.UpdateInstance {
@@ -1514,35 +1442,39 @@ func (ct *controllerTest) SetErrorUpdateInstanceReaction() {
 		})
 }
 
-// SetUpdateServiceInstanceResponseWithDashboardURL sets up UpdateInstanceReaction for fake osb client
+// SetProvisionServiceInstanceResponseWithDashboardURL sets up ProvisionReaction for fake osb client
 // with specific url under the parameter `DashboardURL`
-func (ct *controllerTest) SetUpdateServiceInstanceResponseWithDashboardURL() {
+func (ct *controllerTest) SetProvisionServiceInstanceResponseWithDashboardURL() {
 	dashURL := testDashboardURL
-	ct.fakeOSBClient.UpdateInstanceReaction = &fakeosb.UpdateInstanceReaction{
-		Response: &osb.UpdateInstanceResponse{
+	ct.fakeOSBClient.ProvisionReaction = &fakeosb.ProvisionReaction{
+		Response: &osb.ProvisionResponse{
 			DashboardURL: &dashURL,
 		},
 	}
 }
 
-// CheckFeatureGate enables/disables DefaultFeatureGate functionality and checks its behavior
-func (ct *controllerTest) CheckFeatureGate(enableGate bool) error {
+// AssertServiceInstanceDashboardURL makes sure ServiceInstance `Status.DashboardURL` parameter is equal to test URL
+func (ct *controllerTest) AssertServiceInstanceDashboardURL() error {
 	instance, err := ct.scInterface.ServiceInstances(testNamespace).Get(testServiceInstanceName, v1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("error getting Instance: %v", err)
 	}
 
 	dashURL := testDashboardURL
-	if enableGate {
-		if utilfeature.DefaultFeatureGate.Enabled(scfeatures.UpdateDashboardURL) {
-			if instance.Status.DashboardURL != &dashURL {
-				return fmt.Errorf("unexpected DashboardURL: expected %v", dashURL)
-			}
-		}
-	} else {
-		if instance.Status.DashboardURL != nil {
-			return fmt.Errorf("Dashboard URL should be nil")
-		}
+	if *instance.Status.DashboardURL != dashURL {
+		return fmt.Errorf("unexpected DashboardURL: %v expected %v", instance.Status.DashboardURL, dashURL)
+	}
+	return nil
+}
+
+// AssertServiceInstanceEmptyDashboardURL makes sure ServiceInstance `Status.DashboardURL` is empty
+func (ct *controllerTest) AssertServiceInstanceEmptyDashboardURL() error {
+	instance, err := ct.scInterface.ServiceInstances(testNamespace).Get(testServiceInstanceName, v1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("error getting Instance: %v", err)
+	}
+	if instance.Status.DashboardURL != nil {
+		return fmt.Errorf("Dashboard URL should be nil")
 	}
 
 	return nil
