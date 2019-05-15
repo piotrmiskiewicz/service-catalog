@@ -401,10 +401,12 @@ func internalValidateServiceInstanceReferencesUpdateAllowed(new *sc.ServiceInsta
 
 // ValidateServiceInstanceStatusUpdate checks that when changing from an older
 // instance to a newer instance is okay. This only checks the instance.Status field.
+// todo: the method should be removed after API Server removal
 func ValidateServiceInstanceStatusUpdate(new *sc.ServiceInstance, old *sc.ServiceInstance) field.ErrorList {
 	allErrs := field.ErrorList{}
 	allErrs = append(allErrs, internalValidateServiceInstanceStatusUpdateAllowed(new, old)...)
 	allErrs = append(allErrs, validateServiceInstanceStatus(&new.Status, field.NewPath("status"), false)...)
+    // todo: status validation should be a check of status, not the whole object.
 	allErrs = append(allErrs, internalValidateServiceInstance(new, false)...)
 	return allErrs
 }

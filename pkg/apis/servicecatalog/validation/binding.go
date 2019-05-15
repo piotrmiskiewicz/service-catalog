@@ -62,6 +62,7 @@ var validServiceBindingUnbindStatusValues = func() []string {
 }()
 
 // ValidateServiceBinding validates a ServiceBinding and returns a list of errors.
+// todo: the method validates only Spec and Metadata - the name needs to be changed, all status checks for creating needs be removed
 func ValidateServiceBinding(binding *sc.ServiceBinding) field.ErrorList {
 	return internalValidateServiceBinding(binding, true)
 }
