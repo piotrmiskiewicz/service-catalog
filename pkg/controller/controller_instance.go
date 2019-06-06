@@ -539,7 +539,8 @@ func (c *controller) reconcileServiceInstanceAdd(instance *v1beta1.ServiceInstan
 		return nil
 	}
 
-	if c.resolveServiceInstanceUserSpecifiedClassAndPlan(instance) {
+	if !instance.IsUserSpecifiedClassOrPlanExists() {
+		instance.RecalculatePrinterColumnStatusFields()
 		updatedInstance, err := c.updateServiceInstanceStatus(instance)
 		if err != nil {
 			return err
@@ -780,7 +781,8 @@ func (c *controller) reconcileServiceInstanceUpdate(instance *v1beta1.ServiceIns
 		))
 	}
 
-	if c.resolveServiceInstanceUserSpecifiedClassAndPlan(instance) {
+	if !instance.IsUserSpecifiedClassOrPlanExists() {
+		instance.RecalculatePrinterColumnStatusFields()
 		updatedInstance, err := c.updateServiceInstanceStatus(instance)
 		if err != nil {
 			return err
@@ -1925,7 +1927,7 @@ func (c *controller) updateServiceInstanceStatusWithRetries(
 	const interval = 100 * time.Millisecond
 	const timeout = 10 * time.Second
 	var updatedInstance *v1beta1.ServiceInstance
-	instance.Status.LastConditionState = getServiceInstanceLastConditionState(instance.Status)
+	instance.RecalculatePrinterColumnStatusFields()
 
 	instanceToUpdate := instance
 	err := wait.PollImmediate(interval, timeout, func() (bool, error) {
@@ -1971,7 +1973,7 @@ func (c *controller) updateServiceInstanceCondition(
 	toUpdate := instance.DeepCopy()
 
 	setServiceInstanceCondition(toUpdate, conditionType, status, reason, message)
-	toUpdate.Status.LastConditionState = getServiceInstanceLastConditionState(toUpdate.Status)
+	toUpdate.RecalculatePrinterColumnStatusFields()
 
 	klog.V(4).Info(pcb.Messagef("Updating %v condition to %v", conditionType, status))
 	updatedInstance, err := c.serviceCatalogClient.ServiceInstances(instance.Namespace).UpdateStatus(toUpdate)
@@ -2933,40 +2935,4 @@ func setServiceInstanceLastOperation(instance *v1beta1.ServiceInstance, operatio
 		key := string(*operationKey)
 		instance.Status.LastOperation = &key
 	}
-}
-
-func getServiceInstanceLastConditionState(status v1beta1.ServiceInstanceStatus) string {
-	if len(status.Conditions) > 0 {
-		condition := status.Conditions[len(status.Conditions)-1]
-		if condition.Status == v1beta1.ConditionTrue {
-			return string(condition.Type)
-		}
-		return condition.Reason
-	}
-	return ""
-}
-
-func (c *controller) resolveServiceInstanceUserSpecifiedClassAndPlan(instance *v1beta1.ServiceInstance) bool {
-	if instance.Status.UserSpecifiedPlanName != "" ||
-		instance.Status.UserSpecifiedClassName != "" {
-		return false
-	}
-
-	class, plan := getServiceInstanceCommonClassAndPlan(*instance)
-	instance.Status.UserSpecifiedClassName = class
-	instance.Status.UserSpecifiedPlanName = plan
-
-	return true
-}
-
-func getServiceInstanceCommonClassAndPlan(instance v1beta1.ServiceInstance) (string, string) {
-	var class, plan string
-	if instance.Spec.ClusterServiceClassSpecified() && instance.Spec.ClusterServicePlanSpecified() {
-		class = fmt.Sprintf("ClusterServiceClass/%s", instance.Spec.GetSpecifiedClusterServiceClass())
-		plan = instance.Spec.GetSpecifiedClusterServicePlan()
-	} else {
-		class = fmt.Sprintf("ServiceClass/%s", instance.Spec.GetSpecifiedServiceClass())
-		plan = instance.Spec.GetSpecifiedServicePlan()
-	}
-	return class, plan
 }
